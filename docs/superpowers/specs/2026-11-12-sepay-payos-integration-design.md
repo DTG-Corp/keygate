@@ -78,7 +78,8 @@ reconciliation and refunds — and treat providers as interchangeable settlement
 5. Give operators the tooling they need: unmatched-transfer queue, manual settlement, refund
    recording, provider health, reports/exports.
 6. Support Vietnamese business requirements: VAT invoices/e-invoice, VND formatting, `vi`
-   locale, Vietnam timezone.
+   locale, Vietnam timezone, and marketing discounts (coupons with product/plan scopes,
+   stacking, free-trial codes) that marketing can operate without engineering.
 
 ### 2.2 Non-goals (phase 1)
 
@@ -222,10 +223,15 @@ provider ref, amount, currency, occurred-at, raw JSON.
 - VAT:
   - `products.tax_rate_bp` and `products.price_includes_tax` (new columns, default 0 / true).
   - Order stores `tax_rate_bp`, `subtotal_minor`, `discount_minor`, `tax_minor`, `total_minor`.
+  - `price_includes_tax = true` (VN default): `total_minor = subtotal_minor - discount_minor`;
+    `net = round(total_minor * 10000 / (10000 + tax_rate_bp))`, `tax_minor = total_minor - net`
+    — the VAT portion already contained in the total.
+  - `price_includes_tax = false`: `tax_minor = round((subtotal_minor - discount_minor) *
+    tax_rate_bp / 10000)` and `total_minor = subtotal_minor - discount_minor + tax_minor`.
   - Displayed price is tax-inclusive by default for VN; the invoice always shows the VAT
     breakdown separately.
-- Rounding: all arithmetic in integer minor units; VAT = `round(subtotal_after_discount *
-  tax_rate_bp / 10000)` with half-up rounding; totals recomputed and asserted at settle time.
+- Rounding: all arithmetic in integer minor units with half-up rounding; totals are recomputed
+  and asserted at settle time and must equal the snapshot stored on the order.
 
 ### 3.4 Order lifecycle
 
@@ -249,6 +255,10 @@ created ──► pending ──► paid ──► refunded / partially_refunded
   - Fits SePay payment-code config (prefix `KG`, suffix length 6).
   - Fits SePay VA `order_code` (6–50 alnum; VCB/Shinhan ≤ 15).
   - Generation is random + unique index; retry on collision.
+- Zero-total orders (a `trial` coupon, or a 100 % comp code) skip the payment rail: the order is
+  created as `paid` in the same transaction that creates the licence and records redemptions,
+  with no `payment_attempts` row and `paid_at = now()`. An invoice is still recorded (total 0)
+  but no e-invoice is issued unless the buyer asked for one.
 - PayOS requires a numeric `orderCode`: every order gets a `numeric_code BIGINT` identity
   column (int64, unique). Use that as the PayOS `orderCode`, store it in
   `payment_attempts.provider_ref`, and put `order.code` in `description`. PayOS
@@ -285,6 +295,10 @@ reconciler. Algorithm (single DB transaction per step, row locks):
 8. All steps are idempotent under duplicate webhooks: unique keys on
    `payment_transactions(provider, provider_transaction_id)`, `payment_events(provider,
    provider_event_id)`, `invoices(order_id)` and `license_renewals` ledger uniqueness.
+
+Zero-total orders (§3.4) bypass steps 1–6: settlement runs synchronously at creation inside the
+same transaction as licence creation and coupon redemption; events and emails are dispatched
+after commit like any other paid order.
 
 Failure handling: transient errors roll back the transaction and let the webhook retry
 (return non-2xx only for retryable errors; always ack verified-but-duplicate events). A
@@ -376,14 +390,45 @@ type EInvoiceProvider interface {
 
 ### 3.9 Coupons
 
-- `coupons`: `code`, `type` (`percent`|`fixed`), `value` (basis points for percent, minor units
-  for fixed), optional `currency`, optional `product_id`/`plan_id`, `max_redemptions`,
-  `redeemed_count`, `per_customer_limit`, `valid_from`, `valid_to`, `active`.
-- One coupon per order (no stacking). Validation at order creation; redemption is recorded at
-  settlement, not at creation, so abandoned orders do not consume inventory.
-- Discount applies to the subtotal before VAT; fixed-amount coupons must match the order
-  currency and cannot exceed the subtotal.
-- Per-customer identity: `external_customer_id` when provided, else email.
+Coupons are marketing discounts owned by Keygate. Two families exist: **shared codes**
+(`stack_group = general` or `campaign`) and **private codes** (`stack_group = private`, optionally
+bound to one buyer email) — so a general campaign code and a hand-out code for a single customer
+can be combined on the same order.
+
+- Types:
+  - `percent` — `value` in basis points (1000 = 10 %).
+  - `fixed` — `value` in minor units of `currency`.
+  - `trial` — `trial_days`; no money changes hands: the order is created with `total_minor = 0`
+    and settles at creation (§3.4, §3.5), granting a trial licence for
+    `max(coupon.trial_days, plan.trial_days)`. Only for `kind = new` on subscription/trial plans.
+- Scope lives in `coupon_scopes` (0..n rows): an empty set means **all products**; otherwise the
+  coupon applies when the order's product/plan is one of the listed targets. A coupon can target
+  several products and/or plans in the same list; a plan target covers exactly that plan, a
+  product target covers every plan of that product.
+- Stacking:
+  - An order may carry up to `coupon_max_stack` **amount** coupons (installation setting,
+    default 2; set to 1 to disable stacking).
+  - At most one coupon per `stack_group`: `general` + `campaign` + `private` can stack with each
+    other, but two `general` codes cannot.
+  - Each coupon in the stack must be `stackable = true`; a non-stackable coupon is valid only
+    alone.
+  - A `trial` coupon cannot be combined with any amount coupon.
+  - Application order is `priority` ascending, then `code`; `percent` is computed on the
+    remaining subtotal after previous discounts, `fixed` subtracts from it; the sum of discounts
+    is capped at the subtotal and the order total never goes below 0.
+  - `payment_order_discounts` snapshots one row per applied coupon (`coupon_code`, `type`,
+    `value`, `amount_minor`, `priority`) so invoices and reports stay correct after a coupon is
+    edited or deleted.
+- Validation happens at quote/order creation (and again inside order creation); the hosted
+  payment page only displays the codes already attached to the order. **Redemption is written at
+  settlement**, one `coupon_redemptions` row per coupon per order
+  (`UNIQUE(order_id, coupon_code)`), so abandoned orders never consume inventory and a stacked
+  order records each code separately.
+- Per-customer identity: `external_customer_id` when provided, else lowercased email. A coupon
+  with `assigned_email` is usable only by that buyer.
+- Admin keeps the full redemption history (`GET /api/v1/admin/payments/redemptions`) with the
+  discount amount per code, plus per-coupon counters — needed for marketing attribution and VAT
+  reporting.
 
 ### 3.10 Consumer API and outbound events
 
@@ -433,6 +478,9 @@ the order, licence and amount fields. Existing `license.*` events are unchanged.
 - Feature flags: a provider is usable only if a config row exists, is `enabled`, and has valid
   credentials; otherwise its prices are hidden from checkout and its routes return
   `PAYMENT_PROVIDER_DISABLED`.
+- New install settings (stored with the existing settings store): `payment_order_ttl_minutes`
+  (default 1440), `coupon_max_stack` (default 2), `payment_quote_rate_limit` (default 30/min/IP),
+  plus the VAT seller block and e-invoice credentials referenced in §3.8.
 
 ### 3.12 Localization
 
@@ -452,10 +500,15 @@ The frontend is React 19 + Vite + react-router-dom 7 + TanStack Query + Tailwind
 - `/checkout/pay/:code` — customer payment page: amount, order summary, provider tabs
   (SePay QR / PayOS link), QR image or bank-transfer block, copyable memo, countdown to
   expiry, status polling (`GET /pay/:checkout_id/status` every 3 s with backoff), success and
-  expired states. No auth required; the order code is the capability. It must never grant a
-  licence by itself — it only reads status.
+  expired states. Coupons are shown read-only (chips with code + discount, plus a note that a
+  new order is needed to change them); the page never re-prices an order. No auth required; the
+  order code is the capability. It must never grant a licence by itself — it only reads status.
 - Admin → **Payments**: orders list/detail, unmatched transfers, transactions, provider
-  configuration (secrets show as "configured"), coupons, invoices (issue/void/PDF), reports.
+  configuration (secrets show as "configured"), invoices (issue/void/PDF), reports.
+- Admin → **Payments → Coupons**: list + editor (type percent/fixed/trial, currency, value or
+  trial days, scope picker for products and plans, stack group, stackable, priority, assigned
+  email, redemption limits, validity), live quote preview, per-coupon usage stats, and a global
+  **redemption history** page (filter by coupon/email/date, CSV export).
 - Admin → **Plans**: price rows editor per provider/currency/interval (replaces the raw
   `stripe_price_id` input as the primary editor; the Stripe price id moves to an
   "advanced/legacy" field that writes both `plans.stripe_price_id` and the Stripe
@@ -540,7 +593,6 @@ CREATE TABLE payment_orders (
     currency           CHAR(3) NOT NULL,
     currency_exponent  SMALLINT NOT NULL,
     tax_rate_bp        INT NOT NULL DEFAULT 0,
-    coupon_id          TEXT NULL REFERENCES coupons(id) ON DELETE SET NULL,
     provider           TEXT NOT NULL,
     status             TEXT NOT NULL CHECK (status IN
                          ('pending','paid','expired','canceled','refunded','partially_refunded')),
@@ -685,40 +737,78 @@ CREATE TABLE invoices (
 );
 ```
 
-### 4.9 `coupons` and `coupon_redemptions`
+### 4.9 `coupons`, `coupon_scopes`, `payment_order_discounts`, `coupon_redemptions`
 
 ```sql
 CREATE TABLE coupons (
-    id                TEXT PRIMARY KEY,
-    code              TEXT NOT NULL UNIQUE,
-    description       TEXT NOT NULL DEFAULT '',
-    type              TEXT NOT NULL CHECK (type IN ('percent','fixed')),
-    value             BIGINT NOT NULL CHECK (value > 0),
-    currency          CHAR(3) NULL,
-    product_id        TEXT NULL REFERENCES products(id) ON DELETE CASCADE,
-    plan_id           TEXT NULL REFERENCES plans(id) ON DELETE CASCADE,
-    max_redemptions   INT NOT NULL DEFAULT 0,   -- 0 = unlimited
-    redeemed_count    INT NOT NULL DEFAULT 0,
-    per_customer_limit INT NOT NULL DEFAULT 0,  -- 0 = unlimited
-    valid_from        TIMESTAMPTZ,
-    valid_to          TIMESTAMPTZ,
-    active            BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                 TEXT PRIMARY KEY,
+    code               TEXT NOT NULL UNIQUE,
+    description        TEXT NOT NULL DEFAULT '',
+    type               TEXT NOT NULL CHECK (type IN ('percent','fixed','trial')),
+    value              BIGINT NOT NULL DEFAULT 0 CHECK (value >= 0),
+    trial_days         INT NOT NULL DEFAULT 0 CHECK (trial_days >= 0),
+    currency           CHAR(3) NULL,
+    stack_group        TEXT NOT NULL DEFAULT 'general'
+                         CHECK (stack_group IN ('general','campaign','private')),
+    stackable          BOOLEAN NOT NULL DEFAULT TRUE,
+    priority           INT NOT NULL DEFAULT 100,
+    assigned_email     TEXT NOT NULL DEFAULT '',
+    max_redemptions    INT NOT NULL DEFAULT 0,   -- 0 = unlimited
+    redeemed_count     INT NOT NULL DEFAULT 0,
+    per_customer_limit INT NOT NULL DEFAULT 0,   -- 0 = unlimited
+    valid_from         TIMESTAMPTZ,
+    valid_to           TIMESTAMPTZ,
+    active             BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (type <> 'trial' OR trial_days > 0),
+    CHECK (type = 'trial' OR value > 0)
 );
+
+-- Empty scope set = all products. Otherwise every listed target is covered.
+CREATE TABLE coupon_scopes (
+    coupon_id   TEXT NOT NULL REFERENCES coupons(id) ON DELETE CASCADE,
+    scope_type  TEXT NOT NULL CHECK (scope_type IN ('product','plan')),
+    scope_id    TEXT NOT NULL,
+    PRIMARY KEY (coupon_id, scope_type, scope_id)
+);
+CREATE INDEX coupon_scopes_target_idx ON coupon_scopes (scope_type, scope_id);
+
+CREATE TABLE payment_order_discounts (
+    id            TEXT PRIMARY KEY,
+    order_id      TEXT NOT NULL REFERENCES payment_orders(id) ON DELETE CASCADE,
+    coupon_id     TEXT NULL REFERENCES coupons(id) ON DELETE SET NULL,
+    coupon_code   TEXT NOT NULL,
+    type          TEXT NOT NULL CHECK (type IN ('percent','fixed')),
+    value         BIGINT NOT NULL,
+    amount_minor  BIGINT NOT NULL CHECK (amount_minor >= 0),
+    priority      INT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (order_id, coupon_code)
+);
+CREATE INDEX payment_order_discounts_coupon_idx ON payment_order_discounts (coupon_id);
 
 CREATE TABLE coupon_redemptions (
     id                    TEXT PRIMARY KEY,
-    coupon_id             TEXT NOT NULL REFERENCES coupons(id) ON DELETE CASCADE,
-    order_id              TEXT NOT NULL UNIQUE REFERENCES payment_orders(id) ON DELETE CASCADE,
+    coupon_id             TEXT NOT NULL REFERENCES coupons(id) ON DELETE RESTRICT,
+    coupon_code           TEXT NOT NULL,
+    order_id              TEXT NOT NULL REFERENCES payment_orders(id) ON DELETE CASCADE,
     email                 TEXT NOT NULL DEFAULT '',
     external_customer_id  TEXT NOT NULL DEFAULT '',
-    amount_minor          BIGINT NOT NULL,
-    created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+    type                  TEXT NOT NULL CHECK (type IN ('percent','fixed','trial')),
+    amount_minor          BIGINT NOT NULL DEFAULT 0,
+    trial_days            INT NOT NULL DEFAULT 0,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (order_id, coupon_code)
 );
 CREATE INDEX coupon_redemptions_customer_idx
     ON coupon_redemptions (coupon_id, email, external_customer_id);
+CREATE INDEX coupon_redemptions_coupon_idx
+    ON coupon_redemptions (coupon_id, created_at DESC);
 ```
+
+Migration order: `coupons` → `coupon_scopes` → `payment_orders` → `payment_order_discounts` →
+`coupon_redemptions` (the redemption table references both orders and coupons).
 
 ### 4.10 `payment_sync_cursors`
 
@@ -889,6 +979,7 @@ All new JSON routes use the standard envelope and pagination helpers. Auth colum
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | GET | `/pay/:checkout_id` | public | **Existing route, extended into a dispatcher** — `cs_…` goes to the current Stripe handler; `KG…` answers `302` to the SPA pay page `/checkout/pay/<code>`. Gin allows only one wildcard name at a path position, so the existing `/pay/:checkout_id` route and param name are reused; a second `/pay/:code` route would panic on startup |
+| POST | `/api/v1/payments/quote` | public | Dry-run total for `{plan_id, quantity, email, coupon_codes[]}`; returns discounts/tax/total with **no order created**; rate-limited `payments_public` |
 | GET | `/pay/:checkout_id/status` | public | JSON status for polling (`status`, `amount`, `currency`, `expires_at`, `paid_at`, `qr_payload`, `va_number`, `bank_account`) |
 | POST | `/api/v1/webhook/sepay` | signature | Bank webhook; raw body; ack `{"success": true}` |
 | POST | `/api/v1/webhook/sepay-ipn` | `X-Secret-Key` | Gateway IPN; raw body; ack 200 |
@@ -912,7 +1003,7 @@ Rate-limit scopes: `sepay_webhook`, `sepay_ipn`, `payos_webhook`, `payments_publ
   "provider": "sepay",
   "quantity": 1,
   "external_customer_id": "ws_123",
-  "coupon_code": "TET2026",
+  "coupon_codes": ["TET2026", "ACME10"],
   "buyer": {
     "name": "Nguyen Van A",
     "company_name": "ACME JSC",
@@ -938,13 +1029,17 @@ Response `201`:
     "status": "pending",
     "kind": "new",
     "provider": "sepay",
-    "amount": 1200000,
+    "amount": 971000,
     "currency": "VND",
     "currency_exponent": 0,
-    "subtotal": 1200000,
-    "discount": 0,
-    "tax": 0,
-    "total": 1200000,
+    "subtotal": 1190000,
+    "discount": 219000,
+    "tax": 88273,
+    "total": 971000,
+    "discounts": [
+      {"code": "TET2026", "type": "percent", "amount": 119000},
+      {"code": "ACME10", "type": "fixed", "amount": 100000}
+    ],
     "expires_at": "2026-11-12T17:00:00+07:00",
     "checkout_url": "https://keygate.example.com/pay/KG7F3K2Q",
     "status_url": "https://keygate.example.com/api/v1/payments/orders/KG7F3K2Q",
@@ -964,6 +1059,12 @@ Response `201`:
   used for browser redirects (no server-side fetch).
 - The same endpoint is used for headless integrations: the service renders `qr_payload` /
   `va_number` / `bank_account` itself and polls `status_url` or listens to webhooks.
+- `coupon_codes` is optional; coupons are validated and stacked per §3.9, and the discount
+  breakdown is returned in `discounts[]`. A rejected code fails the request with
+  `PAYMENT_COUPON_*` (no silent drop) unless the caller passes `ignore_invalid_coupons: true`
+  for best-effort marketing flows.
+- `tax` is the VAT portion contained in `total` when `price_includes_tax` is on; it is never added
+  twice.
 - Order creation does not consume coupon inventory; redemption is recorded at settlement.
 
 Other consumer routes:
@@ -994,7 +1095,12 @@ Other consumer routes:
 | GET | `/api/v1/admin/payments/transactions` | Filters: provider, direction, match_status, date range |
 | GET | `/api/v1/admin/payments/unmatched` | Unmatched queue |
 | POST | `/api/v1/admin/payments/transactions/{id}/match` | `{order_code}` or `{action: "ignore"|"other_income"}` |
-| GET/POST/PUT/DELETE | `/api/v1/admin/coupons` | Coupon CRUD |
+| GET | `/api/v1/admin/coupons` | List; filters `q`, `active`, `stack_group`, `scope_type`; pagination |
+| POST | `/api/v1/admin/coupons` | Create with inline `scopes[]` (`{scope_type, scope_id}`) |
+| GET/PUT | `/api/v1/admin/coupons/{id}` | Detail/update (scopes replaced atomically) |
+| DELETE | `/api/v1/admin/coupons/{id}` | Delete only when it has no redemptions; otherwise archive via `active=false` |
+| GET | `/api/v1/admin/coupons/{id}/redemptions` | Per-coupon redemption history |
+| GET | `/api/v1/admin/payments/redemptions` | Global redemption history; filters `coupon`, `email`, `from`, `to`; CSV |
 | GET | `/api/v1/admin/payments/invoices` | Invoice list; filters |
 | POST | `/api/v1/admin/payments/invoices/{id}/issue` | Issue/retry e-invoice |
 | POST | `/api/v1/admin/payments/invoices/{id}/void` | Void invoice |
@@ -1036,6 +1142,10 @@ One code ⇔ one HTTP status (enforced by the existing error-code test). Propose
 | `PAYMENT_TAX_CODE_REQUIRED` | 422 | `buyer.request_invoice=true` without a valid `tax_code` |
 | `PAYMENT_COUPON_INVALID` | 422 | Coupon unknown/expired/not applicable |
 | `PAYMENT_COUPON_EXHAUSTED` | 409 | Redemption limit reached |
+| `PAYMENT_COUPON_STACK_LIMIT` | 422 | More amount coupons than `coupon_max_stack` |
+| `PAYMENT_COUPON_GROUP_CONFLICT` | 422 | Two coupons from the same `stack_group` |
+| `PAYMENT_COUPON_NOT_STACKABLE` | 422 | A non-stackable coupon was combined with another |
+| `PAYMENT_COUPON_TRIAL_MIXED` | 422 | A `trial` coupon was combined with amount coupons |
 | `PAYMENT_PROVIDER_ERROR` | 502 | Provider API failure after retries |
 | `PAYMENT_REFUND_UNSUPPORTED` | 422 | Provider/rail cannot execute refunds |
 | `INVOICE_NOT_FOUND` | 404 | Unknown invoice |
@@ -1108,9 +1218,12 @@ Existing `license.*` events keep their current payloads and semantics.
 - No card data is stored; card fields from SePay IPN are masked and only raw payloads are kept
   for audit with PAN-like fields redacted before persistence (store masked values only).
 - Rate limits: per route family scope; webhook routes also support optional IP allowlist
-  (SePay egress IPs).
-- Audit: every admin action (mark paid, refund, match, config change, invoice issue/void) writes
-  `audit_logs`.
+  (SePay egress IPs). The public quote route (`POST /api/v1/payments/quote`) is limited by
+  `payment_quote_rate_limit` and answers a generic `PAYMENT_COUPON_INVALID` for
+  unknown/expired/not-applicable codes, so it cannot be used to enumerate valid coupon codes.
+- Audit: every admin action (mark paid, refund, match, provider config change, coupon
+  create/update/delete, redemption status change, invoice issue/void, CSV export of redemptions)
+  writes `audit_logs`.
 - AGPL attribution surfaces untouched.
 
 ### 9.1 Observability
@@ -1119,7 +1232,8 @@ Existing `license.*` events keep their current payloads and semantics.
   `event_id`, `amount_minor`, `settlement_result`; secrets and full PANs never logged.
 - Metrics/counters: orders created/paid/expired, settle latency, webhook verification failures,
   duplicate events, settle failures by reason, unmatched transfers count, cursor lag seconds,
-  billing run outcome, invoice issuance failures.
+  billing run outcome, invoice issuance failures, coupon rejections by error code, stacked
+  orders count, discount amount by coupon code.
 - Admin health: `GET /api/v1/admin/payments/health` returns per-provider status
   (last webhook received, last successful reconcile, cursor lag, pending orders, unmatched
   count) for the dashboard.
@@ -1139,6 +1253,11 @@ Existing `license.*` events keep their current payloads and semantics.
 - **Integration (Postgres via `TEST_DATABASE_URL`, `go test -p 1`)**
   - Settlement idempotency: same webhook twice, two concurrent webhooks, duplicate transaction.
   - Renewal order uniqueness under concurrent billing runs.
+  - Coupon stacking: `general` + `private` stack to the expected amounts; two `general` codes
+    rejected; `trial` + amount rejected; `coupon_max_stack` honoured; total discount capped at
+    subtotal; `assigned_email` enforced; redemptions written only at settlement and unique per
+    `(order, coupon)`.
+  - VAT with `price_includes_tax`: net/VAT split and total stay consistent after stacking.
   - Coupon redemption race.
   - Reconciliation matching rules and unmatched transitions.
   - Invoice numbering concurrency.
@@ -1161,11 +1280,12 @@ Existing `license.*` events keep their current payloads and semantics.
 ### Phase 1a — Core rail (first shippable slice)
 
 1. Migrations, in dependency order: `plan_prices` + Stripe backfill; `payment_provider_configs`;
-   `coupons` + `coupon_redemptions` (tables only — CRUD lands in 1b, created now because
-   `payment_orders.coupon_id` references them); `payment_orders`; `payment_attempts`;
-   `payment_transactions`; `payment_events`; `payment_refunds`; `payment_sync_cursors`;
-   `products.tax_rate_bp` / `products.price_includes_tax`; `license_renewals.payment_order_id`
-   and `license_upgrades.payment_order_id` (+ column relaxation from §4.11).
+   `coupons` + `coupon_scopes` (tables only — CRUD lands in 1b, created now so migrations stay
+   additive and the editor needs no second schema change); `payment_orders`;
+   `payment_order_discounts`; `payment_attempts`; `payment_transactions`; `payment_events`;
+   `payment_refunds`; `coupon_redemptions`; `payment_sync_cursors`; `products.tax_rate_bp` /
+   `products.price_includes_tax`; `license_renewals.payment_order_id` and
+   `license_upgrades.payment_order_id` (+ column relaxation from §4.11).
 2. `domain` + `provider` + `sepay` (static QR + bank webhook + reconcile query) + `payos`
    (payment link + webhook + query/cancel).
 3. Checkout: `POST /payments/orders`, `/pay/:checkout_id` dispatcher (Stripe vs VN), SPA page
@@ -1188,7 +1308,8 @@ API and receive `order.paid`.
    cancel-at-period-end, trial conversion, upgrade proration.
 2. Invoices: numbering, PDF, buyer info, VAT; e-invoice adapter + admin issue queue.
 3. Portal: orders, payment page, invoices, billing profile, coupon validation.
-4. Coupons + redemptions.
+4. Coupons: percent/fixed/trial, scopes (products/plans), stacking groups + limits, admin
+   editor, per-coupon and global redemption history with CSV export.
 5. Reports: revenue, reconciliation, VAT, CSV exports.
 6. Remaining events (`order.expired/canceled`, `payment.refunded`, `invoice.*`,
    `license.renewal_due`).
