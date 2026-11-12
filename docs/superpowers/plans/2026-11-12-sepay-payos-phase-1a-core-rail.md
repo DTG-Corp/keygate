@@ -45,12 +45,12 @@ New files (create) and touched files (modify) for this plan. Grouped by responsi
 
 ```
 db/migrations/
-  20261112_plan_prices.{up,down}.sql              T1
-  20261112_payment_provider_configs.{up,down}.sql T1
-  20261112_payment_core.{up,down}.sql             T1 (orders, discounts, attempts, transactions,
+  20261112_01_plan_prices.{up,down}.sql              T1
+  20261112_04_payment_provider_configs.{up,down}.sql T1
+  20261112_03_payment_core.{up,down}.sql             T1 (orders, discounts, attempts, transactions,
                                                      events, refunds, sync cursors)
-  20261112_coupons.{up,down}.sql                  T1 (tables only; logic in Plan 1b)
-  20261112_existing_table_hooks.{up,down}.sql     T1 (products.tax_rate_bp, license_renewals/upgrades)
+  20261112_02_coupons.{up,down}.sql                  T1 (tables only; logic in Plan 1b)
+  20261112_05_existing_table_hooks.{up,down}.sql     T1 (products.tax_rate_bp, license_renewals/upgrades)
 internal/model/payment.go                         T1
 internal/model/model.go                           T1 (alter Product, LicenseRenewal, LicenseUpgrade,
                                                      WebhookEvents, scopes); T8 (event constants)
@@ -100,11 +100,17 @@ Do not create files that duplicate existing responsibilities: use `response.OK/E
 ### Task 1: Schema foundation and models
 
 **Files:**
-- Create: `db/migrations/20261112_plan_prices.up.sql`, `.down.sql`
-- Create: `db/migrations/20261112_payment_provider_configs.up.sql`, `.down.sql`
-- Create: `db/migrations/20261112_payment_core.up.sql`, `.down.sql`
-- Create: `db/migrations/20261112_coupons.up.sql`, `.down.sql`
-- Create: `db/migrations/20261112_existing_table_hooks.up.sql`, `.down.sql`
+- Create: `db/migrations/20261112_01_plan_prices.up.sql`, `.down.sql`
+- Create: `db/migrations/20261112_04_payment_provider_configs.up.sql`, `.down.sql`
+- Create: `db/migrations/20261112_03_payment_core.up.sql`, `.down.sql`
+- Create: `db/migrations/20261112_02_coupons.up.sql`, `.down.sql`
+- Create: `db/migrations/20261112_05_existing_table_hooks.up.sql`, `.down.sql`
+
+  The numeric infix is required: `RunMigrations` runs `os.ReadDir` order, so the
+  plain names would run `coupons`, `payment_core` and `plan_prices` alphabetically —
+  after the tables they reference. These five names run in dependency order
+  (`plan_prices` → `coupons` → `payment_core` → `payment_provider_configs` →
+  `existing_table_hooks`).
 - Create: `internal/model/payment.go`
 - Modify: `internal/model/model.go` (add `TaxRateBP`/`PriceIncludesTax` to `Product`; `PaymentOrderID` to `LicenseRenewal`/`LicenseUpgrade`)
 - Test: `internal/store/payment_schema_test.go`
@@ -176,7 +182,7 @@ Expected: FAIL with "table plan_prices missing".
 
 - [ ] **Step 3: Write the migrations**
 
-`db/migrations/20261112_plan_prices.up.sql` (copy spec §4.1 exactly):
+`db/migrations/20261112_01_plan_prices.up.sql` (copy spec §4.1 exactly):
 
 ```sql
 CREATE TABLE IF NOT EXISTS plan_prices (
@@ -196,13 +202,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS plan_prices_unique_active
     ON plan_prices (plan_id, provider, currency, billing_interval) WHERE active;
 ```
 
-`20261112_plan_prices.down.sql`:
+`20261112_01_plan_prices.down.sql`:
 
 ```sql
 DROP TABLE IF EXISTS plan_prices;
 ```
 
-`20261112_payment_provider_configs.up.sql` (spec §4.2):
+`20261112_04_payment_provider_configs.up.sql` (spec §4.2):
 
 ```sql
 CREATE TABLE IF NOT EXISTS payment_provider_configs (
@@ -221,13 +227,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS payment_provider_configs_unique
     ON payment_provider_configs (provider, product_id, mode) NULLS NOT DISTINCT;
 ```
 
-`20261112_payment_provider_configs.down.sql`:
+`20261112_04_payment_provider_configs.down.sql`:
 
 ```sql
 DROP TABLE IF EXISTS payment_provider_configs;
 ```
 
-`20261112_payment_core.up.sql` — copy spec §4.3–4.8 and §4.10: `payment_orders`, `payment_order_discounts`, `payment_attempts`, `payment_transactions`, `payment_events`, `payment_refunds`, `payment_sync_cursors`, with the indexes shown there. Two literal changes from the spec text: keep `payment_orders.coupon_id` **out** (drop it; discounts are rows), and add `payment_orders.updated_at` trigger-free (handler updates it explicitly). Full `payment_orders` DDL for the migration:
+`20261112_03_payment_core.up.sql` — copy spec §4.3–4.8 and §4.10: `payment_orders`, `payment_order_discounts`, `payment_attempts`, `payment_transactions`, `payment_events`, `payment_refunds`, `payment_sync_cursors`, with the indexes shown there. Two literal changes from the spec text: keep `payment_orders.coupon_id` **out** (drop it; discounts are rows), and add `payment_orders.updated_at` trigger-free (handler updates it explicitly). Full `payment_orders` DDL for the migration:
 
 ```sql
 CREATE TABLE IF NOT EXISTS payment_orders (
@@ -282,9 +288,9 @@ CREATE TABLE IF NOT EXISTS payment_order_discounts (
 );
 ```
 
-`20261112_coupons.up.sql` — copy spec §4.9 tables verbatim (`coupons`, `coupon_scopes`, `coupon_redemptions`). Logic is Plan 1b; the tables exist now because `payment_order_discounts` and the coupon FKs need them.
+`20261112_02_coupons.up.sql` — copy spec §4.9 tables verbatim (`coupons`, `coupon_scopes`, `coupon_redemptions`). Logic is Plan 1b; the tables exist now because `payment_order_discounts` and the coupon FKs need them.
 
-`20261112_existing_table_hooks.up.sql` (spec §4.11):
+`20261112_05_existing_table_hooks.up.sql` (spec §4.11):
 
 ```sql
 ALTER TABLE products ADD COLUMN IF NOT EXISTS tax_rate_bp INT NOT NULL DEFAULT 0;
