@@ -400,7 +400,9 @@ can be combined on the same order.
   - `fixed` — `value` in minor units of `currency`.
   - `trial` — `trial_days`; no money changes hands: the order is created with `total_minor = 0`
     and settles at creation (§3.4, §3.5), granting a trial licence for
-    `max(coupon.trial_days, plan.trial_days)`. Only for `kind = new` on subscription/trial plans.
+    `max(coupon.trial_days, plan.trial_days)`. Only for `kind = new` on **trial-capable plans**
+    (`plans.trial_days > 0`); a plan without a trial rejects the code with
+    `PAYMENT_COUPON_INVALID`.
 - Scope lives in `coupon_scopes` (0..n rows): an empty set means **all products**; otherwise the
   coupon applies when the order's product/plan is one of the listed targets. A coupon can target
   several products and/or plans in the same list; a plan target covers exactly that plan, a
@@ -425,7 +427,9 @@ can be combined on the same order.
   (`UNIQUE(order_id, coupon_code)`), so abandoned orders never consume inventory and a stacked
   order records each code separately.
 - Per-customer identity: `external_customer_id` when provided, else lowercased email. A coupon
-  with `assigned_email` is usable only by that buyer.
+  with `assigned_email` is **hard-blocked** to that buyer: no admin override, no fallback to a
+  different email, and no "apply anyway" path in checkout or API. Admins who need to move a
+  private code reassign `assigned_email` on the coupon (audited) instead.
 - Admin keeps the full redemption history (`GET /api/v1/admin/payments/redemptions`) with the
   discount amount per code, plus per-coupon counters — needed for marketing attribution and VAT
   reporting.
@@ -1146,6 +1150,7 @@ One code ⇔ one HTTP status (enforced by the existing error-code test). Propose
 | `PAYMENT_COUPON_GROUP_CONFLICT` | 422 | Two coupons from the same `stack_group` |
 | `PAYMENT_COUPON_NOT_STACKABLE` | 422 | A non-stackable coupon was combined with another |
 | `PAYMENT_COUPON_TRIAL_MIXED` | 422 | A `trial` coupon was combined with amount coupons |
+| `PAYMENT_COUPON_ASSIGNED` | 422 | Coupon is bound to another email (`assigned_email`) |
 | `PAYMENT_PROVIDER_ERROR` | 502 | Provider API failure after retries |
 | `PAYMENT_REFUND_UNSUPPORTED` | 422 | Provider/rail cannot execute refunds |
 | `INVOICE_NOT_FOUND` | 404 | Unknown invoice |
@@ -1255,8 +1260,9 @@ Existing `license.*` events keep their current payloads and semantics.
   - Renewal order uniqueness under concurrent billing runs.
   - Coupon stacking: `general` + `private` stack to the expected amounts; two `general` codes
     rejected; `trial` + amount rejected; `coupon_max_stack` honoured; total discount capped at
-    subtotal; `assigned_email` enforced; redemptions written only at settlement and unique per
-    `(order, coupon)`.
+    subtotal; `assigned_email` hard-blocked (different buyer email → `PAYMENT_COUPON_ASSIGNED`,
+    no override path); `trial` coupon rejected on a plan with `trial_days = 0`; redemptions
+    written only at settlement and unique per `(order, coupon)`.
   - VAT with `price_includes_tax`: net/VAT split and total stay consistent after stacking.
   - Coupon redemption race.
   - Reconciliation matching rules and unmatched transitions.
