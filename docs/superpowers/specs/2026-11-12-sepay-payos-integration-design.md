@@ -199,8 +199,8 @@ provider ref, amount, currency, occurred-at, raw JSON.
   - Stripe rows keep `external_price_id = plans.stripe_price_id` after backfill.
   - VND rows have `external_price_id = ''`.
 - Read path (`GET /api/v1/products/:product_slug/plans`) becomes **local-first** with a Stripe
-  fallback only while the backfill has not run for a plan. The Stripe fallback is removed in
-  phase 2.
+  fallback only while the backfill has not run for a plan. The backfill scope is decided in
+  §13.1; whichever option is chosen, the Stripe fallback is removed in phase 2.
 - The existing public plans fields keep working (the same `price`/`currency`/interval fields);
   only the source of the number changes. Stripe checkouts continue to use Stripe's own
   invoices/receipts — the invoice module in §3.8 applies to VN orders in phase 1.
@@ -383,8 +383,11 @@ type EInvoiceProvider interface {
 
   - Configuration: provider name + credentials in `payment_provider_configs`
     (`provider = 'einvoice:<vendor>'`), admin selectable.
-  - Default phase-1 behaviour: if an e-invoice provider is configured, issue on payment; if
-    not, invoice status is `pending_issue` and appears in an admin queue for manual issuance.
+  - **Vendor integration is deferred** (owner decision 2026-11-12): phase 1 ships the invoice
+    record, PDF and manual issue queue only. If a provider is configured later, issue runs on
+    payment; until then invoices stay `pending_issue` and are issued by hand (status flipped by
+    an admin action, audited). The preferred first adapter when accounting is ready is SePay
+    eInvoice; MISA/VNPT/Viettel remain possible behind the same interface.
   - Buyer tax information is collected at checkout when the buyer requests a VAT invoice
     (`buyer.tax_code` required in that case).
 
@@ -1049,7 +1052,7 @@ Response `201`:
     "status_url": "https://keygate.example.com/api/v1/payments/orders/KG7F3K2Q",
     "qr_payload": "000201010212…",
     "va_number": "",
-    "bank_account": { "bank": "VCB", "account_number": "0071000123456", "account_name": "ACME JSC" }
+    "bank_account": { "bank": "MB", "account_number": "0978482700", "account_name": "CONG TY TNHH KEYGATE" }
   }
 }
 ```
@@ -1327,7 +1330,9 @@ provider totals.
 ### Phase 2 — Full capability
 
 - SePay gateway cards + NAPAS hosted checkout (dossier-dependent), card void before settlement.
-- Per-order VA (BIDV/Sacombank/VCB/VietinBank/Shinhan) with bank-specific parameters.
+- Per-order VA (BIDV/Sacombank/VCB/VietinBank/Shinhan) with bank-specific parameters. Note:
+  the phase-1 receiving account is MB Bank, which is not in SePay's VA list, so VA stays
+  optional and on a supported bank when enabled.
 - Refund execution: SePay API v2 (VietinBank, idempotency key, async status) + admin approval.
 - PayOS payouts (chi hộ) for refunds/affiliate, approval workflow.
 - E-invoice provider integrations beyond the default adapter.
@@ -1371,24 +1376,36 @@ provider totals.
 
 ---
 
-## 13. Open questions
+## 13. Resolved decisions and remaining questions
 
-1. **E-invoice vendor**: SePay eInvoice (same vendor, separate onboarding) vs. MISA/VNPT/Viettel
-   vs. manual issuance in phase 1. The adapter design makes this swappable; the default should
-   be confirmed before phase 1b.
-2. **PayOS merchant readiness**: has the PayOS channel been created and verified (KYC + bank
-   link)? No sandbox means production credentials are required for any end-to-end test.
-3. **SePay bank account**: which bank/account will receive transfers? VA-per-order support
-   (phase 2) depends on the bank (BIDV DN, Sacombank, VCB, VietinBank DN, Shinhan).
-4. **Invoice PDF library**: choose a pure-Go PDF library in the implementation plan (no headless
-   browser); confirm invoice template requirements with accounting.
-5. **Tax rate defaults**: confirm VAT rate(s) per product and whether listed prices include VAT.
-6. **Consumer return URLs**: do services need per-key allowlists for `success_url`/`cancel_url`
-   in phase 1, or is `https`-only validation sufficient?
-7. **Stripe parity**: should `plan_prices` be backfilled for all existing plans in phase 1a, or
-   only for plans that will be sold in VND?
+Decisions taken with the product owner on 2026-11-12:
 
----
+| # | Question | Decision |
+|---|---|---|
+| 1 | E-invoice vendor | **Deferred.** Phase 1 ships the invoice PDF + `pending_issue` queue + the `EInvoiceProvider` seam; no vendor integration now. Preferred first adapter when accounting is ready: SePay eInvoice (sibling of the payment vendor). |
+| 2 | PayOS merchant readiness | **Ready** — a verified merchant channel exists; PayOS E2E can run against production credentials with a small real amount, config row tagged `mode=test` until go-live. |
+| 3 | SePay receiving account | **MB Bank, `0978482700`** (account name from onboarding). Static VietQR + transfer-memo flow works on MB. Per-order VA (phase 2) needs a bank on SePay's VA list (BIDV/Sacombank/VCB/VietinBank/Shinhan), so VA — if enabled — uses a supported bank while the default receiving account stays MB. |
+| 4 | Invoice PDF library | Pure-Go (`go-pdf/fpdf` or `gopdf`), final choice in the implementation plan; no headless browser. |
+| 5 | Tax defaults | VAT 10 %, tax-inclusive, default for every product; override per product with `tax_rate_bp` / `price_includes_tax`. |
+| 6 | Return URL allowlist | Phase 1: absolute `https`, no credentials, redirect only; per-API-key allowlist is phase-2 hardening. |
+| 7 | Stripe backfill scope | **Pending owner confirmation** — see §13.1. |
+
+### 13.1 Stripe backfill (open)
+
+`plan_prices` becomes the local source of truth for prices. Existing Stripe plans still keep
+their `plans.stripe_price_id`; the question is how much to copy into `plan_prices` in phase 1a.
+
+- **Option A — backfill every plan that has a Stripe price.** A one-off script (or admin action)
+  lists plans with `stripe_price_id`, fetches each Stripe Price, and inserts the matching
+  `plan_prices` row. The read path then needs no Stripe API call, and the temporary Stripe
+  fallback can be deleted in phase 2.
+- **Option B — backfill only the plans sold in VND now.** Keep the Stripe API fallback for the
+  rest until phase 2. Less data copied now, but the fallback path stays alive longer and the
+  copy must be finished later anyway.
+
+**Recommendation: A.** The migration is mechanical, the fallback is temporary code either way,
+and the read path is simpler to test. If Stripe API access is unavailable during rollout, the
+script is idempotent and can be re-run; the read path already tolerates missing rows.
 
 ## Appendix A — Provider field reference (verified)
 
