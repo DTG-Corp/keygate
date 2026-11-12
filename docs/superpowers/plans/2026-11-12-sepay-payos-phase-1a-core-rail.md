@@ -393,9 +393,9 @@ type PaymentAttempt struct {
 	Currency      string     `bun:",notnull" json:"currency"`
 	QRPayload     string     `bun:",notnull,default:''" json:"qr_payload"`
 	CheckoutURL   string     `bun:",notnull,default:''" json:"checkout_url"`
-	VANumber      string     `bun:",notnull,default:''" json:"va_number"`
-	FailureReason string     `bun:",notnull,default:''" json:"failure_reason"`
-	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	VANumber      string          `bun:",notnull,default:''" json:"va_number"`
+	Raw           json.RawMessage `bun:",notnull,type:jsonb" json:"raw"`
+	ExpiresAt     *time.Time      `json:"expires_at,omitempty"`
 	CreatedAt     time.Time  `bun:",nullzero,default:now()" json:"created_at"`
 	UpdatedAt     time.Time  `bun:",nullzero,default:now()" json:"updated_at"`
 }
@@ -2240,7 +2240,7 @@ git commit -m "feat(payments): encrypted provider configs with product override 
   - `(*Store).MarkPaymentOrderPaid(ctx, tx bun.Tx, orderID string, paidAt time.Time) (*model.PaymentOrder, error)` — row lock, terminal guard `ErrOrderNotPayable`.
   - `(*Store).CancelPaymentOrder(ctx, code string) (*model.PaymentOrder, error)`.
   - `(*Store).ExpirePaymentOrders(ctx, now time.Time) (int, error)`.
-  - `(*Store).CreatePaymentAttempt(ctx, attempt *model.PaymentAttempt) error`; `(*Store).UpdatePaymentAttemptStatus(ctx, id, status, providerRef string) error`.
+  - `(*Store).CreatePaymentAttempt(ctx, attempt *model.PaymentAttempt) error`; `(*Store).UpdatePaymentAttemptStatus(ctx, id, status, providerRef string) error`; `(*Store).GetLatestPaymentAttempt(ctx, orderID string) (*model.PaymentAttempt, error)`.
   - `store.OrderDiscount{CouponCode, Type string; Value, AmountMinor int64; Priority int; CouponID string}`.
 
 - [ ] **Step 1: Write the failing order round-trip test**
@@ -2567,6 +2567,16 @@ func (s *Store) CreatePaymentAttempt(ctx context.Context, a *model.PaymentAttemp
 	}
 	_, err := s.DB.NewInsert().Model(a).Exec(ctx)
 	return err
+}
+
+func (s *Store) GetLatestPaymentAttempt(ctx context.Context, orderID string) (*model.PaymentAttempt, error) {
+	a := new(model.PaymentAttempt)
+	err := s.DB.NewSelect().Model(a).
+		Where("order_id = ?", orderID).Order("created_at DESC").Limit(1).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, sql.ErrNoRows
+	}
+	return a, err
 }
 
 func (s *Store) UpdatePaymentAttemptStatus(ctx context.Context, id, status, providerRef string) error {
@@ -5165,6 +5175,11 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 		result.ExpiresAt = expiresAt
 	}
 	attempt.ExpiresAt = &result.ExpiresAt
+	// attempts.raw is the spec's JSONB escape hatch: it keeps the bank
+	// account the adapter chose, plus anything provider-specific, so the
+	// public status page can render transfer details without asking the
+	// provider again.
+	attempt.Raw = attemptRaw(&result)
 	if err := s.Store.CreatePaymentAttempt(ctx, attempt); err != nil {
 		return nil, err
 	}
@@ -5172,6 +5187,17 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 		s.Webhooks.Dispatch(ctx, product.ID, model.EventOrderCreated, map[string]any{"order": order})
 	}
 	return &OrderResult{Order: order, Attempt: attempt}, nil
+}
+
+// attemptRaw serialises the non-secret parts of a CreateAttemptResult.
+func attemptRaw(res *provider.CreateAttemptResult) json.RawMessage {
+	b, err := json.Marshal(map[string]any{
+		"bank": res.Bank, "provider_raw": res.Raw, "description": res.Description,
+	})
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return b
 }
 
 func (s *Service) orderTTL(ctx context.Context) time.Duration {
@@ -5309,6 +5335,70 @@ func orderView(res *checkout.OrderResult) gin.H {
 `payments_public.go` adds `GET /pay/:checkout_id/status` and the `PayPage` dispatcher. The coupon-era quote endpoint (`POST /api/v1/payments/quote`) is deliberately not part of phase 1a: its whole payload is discounts and tax preview, and coupons land in 1b; adding it now would publish an API without its contract.
 
 ```go
+type PaymentsPublicHandler struct {
+	Checkout *checkout.Service
+	Store    *store.Store
+	// Stripe keeps serving the legacy cs_… links; it is never called for
+	// a KG order code.
+	Stripe *payment.StripeHandler
+}
+
+// statusView is the public pay-page payload. It is deliberately flat and
+// contains no buyer email, metadata or API-key id: the order code is the
+// only capability the holder has.
+func statusView(order *model.PaymentOrder, attempt *model.PaymentAttempt) gin.H {
+	out := gin.H{
+		"code": order.Code, "status": order.Status,
+		"amount_minor": order.TotalMinor, "currency": order.Currency,
+		"currency_exponent": order.CurrencyExp,
+		"expires_at": order.ExpiresAt, "description": order.Code,
+	}
+	if attempt == nil {
+		return out
+	}
+	out["qr_image_url"] = attempt.QRPayload
+	out["checkout_url"] = attempt.CheckoutURL
+	if len(attempt.Raw) > 0 {
+		var raw struct {
+			Bank        provider.BankAccount `json:"bank"`
+			Description string               `json:"description"`
+		}
+		if err := json.Unmarshal(attempt.Raw, &raw); err == nil {
+			if raw.Bank.AccountNo != "" {
+				out["bank"] = raw.Bank
+			}
+			if raw.Description != "" {
+				out["description"] = raw.Description
+			}
+		}
+	}
+	return out
+}
+
+func (h *PaymentsPublicHandler) Status(c *gin.Context) {
+	code := c.Param("checkout_id")
+	if !domain.IsOrderCode(code) {
+		response.NotFound(c, "checkout not found")
+		return
+	}
+	order, err := h.Store.GetPaymentOrderByCode(c, code)
+	if errors.Is(err, store.ErrOrderNotFound) {
+		response.NotFound(c, "checkout not found")
+		return
+	}
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	attempt, err := h.Store.GetLatestPaymentAttempt(c, order.ID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		response.Internal(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	response.OK(c, statusView(order, attempt))
+}
+
 const stripeCheckoutPrefix = "cs_"
 
 // PayPage keeps the single existing wildcard route alive: Stripe links
