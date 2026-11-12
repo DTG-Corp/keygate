@@ -2437,6 +2437,13 @@ func (s *Store) CreatePaymentOrder(ctx context.Context, in CreateOrderInput) (*m
 			if _, err := tx.NewInsert().Model(order).Exec(ctx); err != nil {
 				return err
 			}
+			// numeric_code is a database identity column, so the insert
+			// omits it and Bun does not read it back. Re-select the row
+			// inside the same transaction to populate it — the PayOS
+			// orderCode is this value, so a zero here breaks every link.
+			if err := tx.NewSelect().Model(order).Where("id = ?", order.ID).Scan(ctx); err != nil {
+				return err
+			}
 			for _, d := range in.Discounts {
 				row := &model.PaymentOrderDiscount{
 					ID: NewID(), OrderID: order.ID, CouponID: d.CouponID, CouponCode: d.CouponCode,
@@ -3892,7 +3899,7 @@ git commit -m "feat(payments): add PayOS adapter (link, webhook signature, confi
 - Produces:
   - `store.RecordPaymentEvent(ctx, tx bun.Tx, in PaymentEventInput) (inserted bool, err error)` with `PaymentEventInput{Provider, EventID, OrderID, Kind, Raw []byte, OccurredAt time.Time}`; `store.ErrDuplicateEvent` not used — duplicates return `inserted=false`.
   - `handler.PaymentsWebhookHandler{Store, Config *providercfg.Service, Settlement *settlement.Service, Log}` with `HandleSePay`, `HandleSePayIPN`, `HandlePayOS`.
-  - Event constants `model.EventOrderCreated`, `model.EventOrderPaid`, `model.EventOrderExpired`, `model.EventOrderCanceled`, `model.EventPaymentSucceeded`, `model.EventPaymentFailed`.
+  - Event constants `model.EventOrderCreated`, `model.EventOrderPaid`, `model.EventPaymentSucceeded`, `model.EventPaymentFailed` — exactly the four the spec puts in phase 1a; `order.expired/canceled/refunded` belong to phase 1b.
 
 - [ ] **Step 1: Add the event constants and their test**
 
@@ -3908,8 +3915,8 @@ import (
 
 func TestPaymentWebhookEventsRegistered(t *testing.T) {
 	for _, e := range []string{
-		model.EventOrderCreated, model.EventOrderPaid, model.EventOrderExpired,
-		model.EventOrderCanceled, model.EventPaymentSucceeded, model.EventPaymentFailed,
+		model.EventOrderCreated, model.EventOrderPaid,
+		model.EventPaymentSucceeded, model.EventPaymentFailed,
 	} {
 		if !model.IsValidWebhookEvent(e) {
 			t.Fatalf("%q is not in WebhookEvents", e)
@@ -3921,12 +3928,10 @@ func TestPaymentWebhookEventsRegistered(t *testing.T) {
 In `internal/model/model.go`, add to the event const block:
 
 ```go
-	EventOrderCreated       = "order.created"
-	EventOrderPaid          = "order.paid"
-	EventOrderExpired       = "order.expired"
-	EventOrderCanceled      = "order.canceled"
-	EventPaymentSucceeded   = "payment.succeeded"
-	EventPaymentFailed      = "payment.failed"
+	EventOrderCreated     = "order.created"
+	EventOrderPaid        = "order.paid"
+	EventPaymentSucceeded = "payment.succeeded"
+	EventPaymentFailed    = "payment.failed"
 ```
 
 and append them to `WebhookEvents`.
@@ -4616,6 +4621,11 @@ func (s *Service) failOrder(ctx context.Context, order *model.PaymentOrder, caus
 	_, _ = s.Store.DB.NewUpdate().Model((*model.PaymentOrder)(nil)).
 		Set("last_settlement_error = ?", cause.Error()).
 		Set("updated_at = ?", time.Now()).Where("id = ?", order.ID).Exec(ctx)
+	if s.Webhooks != nil {
+		s.Webhooks.Dispatch(ctx, order.ProductID, model.EventPaymentFailed, map[string]any{
+			"order": order, "error": cause.Error(),
+		})
+	}
 	return cause
 }
 
@@ -4890,7 +4900,7 @@ git commit -m "feat(payments): settle paid SePay/PayOS orders into licences and 
   - `checkout.CreateOrderInput{PlanID, Email, Provider string; Quantity int; Buyer provider.Buyer; Metadata map[string]any; CreatedByKeyID string}`
   - `(*Service).CreateOrder(ctx, in) (*checkout.OrderResult, error)`; `OrderResult{Order *model.PaymentOrder; Attempt *model.PaymentAttempt}`
   - `checkout.ErrPlanNotSellable`, `checkout.ErrPriceNotConfigured` (wraps `store.ErrPriceNotConfigured`), `checkout.ErrProviderUnavailable`
-  - `handler.PaymentsPublicHandler{Checkout, Store}` with `CreateOrder`, `Status`, `PayPage` (302 dispatcher helper)
+  - `handler.PaymentsPublicHandler{Checkout, Store}` with `Status` and `PayPage` (302 dispatcher helper)
   - `handler.PaymentsAPIHandler{Checkout, Store}` with `Create`, `Get`, `List`, `Cancel`
   - `model.ScopePaymentsWrite`, `model.ScopePaymentsRead`.
 
@@ -5290,7 +5300,7 @@ func orderView(res *checkout.OrderResult) gin.H {
 }
 ```
 
-`payments_public.go` adds `POST /api/v1/payments/quote` (dry-run: resolve price + ComputeTotals, no order), `GET /pay/:checkout_id/status`, and `PayPage` dispatcher:
+`payments_public.go` adds `GET /pay/:checkout_id/status` and the `PayPage` dispatcher. The coupon-era quote endpoint (`POST /api/v1/payments/quote`) is deliberately not part of phase 1a: its whole payload is discounts and tax preview, and coupons land in 1b; adding it now would publish an API without its contract.
 
 ```go
 const stripeCheckoutPrefix = "cs_"
@@ -5319,6 +5329,39 @@ stripeH := payment.NewStripeHandler(...) // existing constructor stays
 payPublicH := &handler.PaymentsPublicHandler{Checkout: checkoutSvc, Store: db, Stripe: stripeH}
 r.GET("/pay/:checkout_id", payPublicH.PayPage)                 // replaces stripeH.CheckoutByPlan
 r.GET("/pay/:checkout_id/status", payPublicH.Status)           // public JSON poll
+
+// providerFactory builds the adapter for one resolved config row. The
+// checkout service and the reconciler both need it, and neither may
+// construct adapters itself: only this function knows that a
+// ResolvedConfig's secrets and bank fields map onto a sepay.Config /
+// payos.Config.
+providerFactory := func(ctx context.Context, productID, providerName string) (provider.Provider, *providercfg.ResolvedConfig, error) {
+	cfg, err := providerSvc.Resolve(ctx, productID, providerName, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	switch providerName {
+	case "sepay":
+		return sepay.New(sepay.Config{
+			Sandbox:         cfg.Mode == "test",
+			WebhookAuthMode: cfg.WebhookAuthMode,
+			APIKey:          cfg.APIKey,
+			IPNSecret:       cfg.IPNSecret,
+			APIToken:        cfg.APIToken,
+			Bank: provider.BankAccount{
+				BankName: cfg.BankName, AccountNo: cfg.AccountNo, AccountName: cfg.AccountName,
+			},
+			BankCode: cfg.BankCode,
+		}), cfg, nil
+	case "payos":
+		return payos.New(payos.Config{
+			ClientID: cfg.ClientID, APIKey: cfg.APIKey, ChecksumKey: cfg.ChecksumKey,
+		}), cfg, nil
+	default:
+		return nil, nil, providercfg.ErrProviderNotConfigured
+	}
+}
+checkoutSvc := &checkout.Service{Store: db, Config: providerSvc, Providers: providerFactory, Webhooks: webhookSvc, Log: logger}
 ```
 
 Keep the old Stripe success/cancel behaviour untouched; the dispatcher only changes the entry route's branch.
@@ -5948,7 +5991,8 @@ Use the existing pagination helper for list endpoints. Add `GET /admin/payments/
 
 ```go
 if paymentCodec != nil {
-	rec := &reconcile.Worker{Store: db, Matcher: &reconcile.Matcher{Store: db}, Settlement: settleSvc, Log: logger}
+	rec := &reconcile.Worker{Store: db, Config: providerSvc, Matcher: &reconcile.Matcher{Store: db},
+		Settlement: settleSvc, Log: logger}
 	go rec.Run(ctx)
 }
 ```
@@ -5981,7 +6025,7 @@ git commit -m "feat(payments): reconciliation worker, unmatched queue and admin 
 - Test: no unit-test framework in `web/`; the gate is `npm run typecheck && npm run lint && npm run build`, plus the manual Playwright pass in Step 7.
 
 **Interfaces:**
-- Consumes: `GET /pay/:code/status`, `POST /api/v1/payments/quote`, admin payment APIs from T3/T11, existing `useQuery`/`api` helpers in `web/src/lib`.
+- Consumes: `GET /pay/:code/status`, admin payment APIs from T3/T11, existing `useQuery`/`api` helpers in `web/src/lib`.
 - Produces: routes `/checkout/pay/:code`, `/admin/payments/providers`, `/admin/payments/orders`, `/admin/payments/unmatched`, `/admin/plans/:id/prices`; `formatMoney(minor: number, currency: string, exponent: number): string`; `vi` locale.
 
 - [ ] **Step 1: Add the money helper with Intl and exponent support**
@@ -6310,7 +6354,7 @@ In `docs/api-contract.md`:
 - Fix the stale `POST /webhook/stripe` row to `POST /api/v1/webhook/stripe` while editing.
 - Add `POST /api/v1/webhook/sepay`, `/sepay-ipn`, `/payos` rows: raw body (not the envelope), expected auth header, ack body, retry expectation.
 - Add the consumer API table (`/api/v1/payments/orders`, `/:code`, `/:code/cancel`, `/prices`, `/quote`), scope column (`payments:write`/`payments:read`), and the `Idempotency-Key` requirement on create.
-- Add the public routes (`/pay/:checkout_id/status`, `/api/v1/payments/quote`) and their rate-limit scopes.
+- Add the public route `/pay/:checkout_id/status` and its rate-limit scope.
 - Add the admin family with the routes from T11, listed as session-auth only.
 
 In `docs/openapi.yaml`: add schemas `PaymentOrder`, `PaymentAttempt`, `PaymentPrice`, `PaymentWebhookSePay`, `PaymentWebhookPayOS`, and the operations above. Webhook operations get `requestBody.content.application/json` and a `200` ack; they must not reuse the standard error envelope schema.
