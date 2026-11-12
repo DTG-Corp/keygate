@@ -49,3 +49,6 @@ seed
 
 # Stray build output from `go build ./cmd/server` without -o
 /server
+
+# Local git worktrees
+.worktrees/
