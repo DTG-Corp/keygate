@@ -3,7 +3,9 @@
 - **Status:** Draft — awaiting review
 - **Date:** 2026-11-12
 - **Scope:** Vietnamese payment rails (SePay, PayOS) plus a provider-neutral payment/licensing
-  core that other internal services consume.
+  core that other internal services consume. **Stripe is out of scope for this phase** (no Stripe
+  API calls, no price reads, no backfill); the existing Stripe files and routes stay untouched
+  and keep working as they are today.
 - **Related:** [api-contract.md](../../api-contract.md), [openapi.yaml](../../openapi.yaml),
   [AGENTS.md](../../../AGENTS.md)
 
@@ -16,14 +18,15 @@
 | D1 | Revenue model for VN customers | **Subscriptions + one-time/perpetual**, with a Keygate-owned billing engine (neither SePay nor PayOS has recurring billing) |
 | D2 | How other services consume payments | **Hybrid**: hosted payment page by default + headless API so a service can render its own QR/VA UI |
 | D3 | Merchant / revenue routing | **Default merchant for the install + optional per-product override** (`product_id` nullable from day one) |
-| D4 | Phase-1 must-haves | Core order/checkout/settlement/reconcile + billing engine, **VAT invoices/e-invoice**, **customer portal**, **coupons + tax/reconciliation reports**. Cards, per-order VA, payout, full refund workflow are phase 2 |
-| D5 | Architecture | **Unified payment domain** (`Provider` interface + order/settlement/billing core). Stripe keeps its current code path in phase 1; `plan_prices` already maps Stripe prices so Stripe can move onto the shared path later |
+| D4 | Phase-1 must-haves | Core order/checkout/settlement/reconcile + billing engine, **VAT invoices (PDF + manual issue; e-invoice vendor deferred)**, **customer portal**, **coupons + tax/reconciliation reports**. Cards, per-order VA, payout, full refund workflow are phase 2 |
+| D5 | Architecture | **Unified payment domain** (`Provider` interface + order/settlement/billing core) for SePay + PayOS. `plan_prices` is the local price source; Stripe is not wired into this phase at all (files untouched, no API calls). A Stripe adapter can join the same interface in phase 2+ |
 
 Non-negotiable constraints carried from the existing project:
 
 - AGPLv3 §7(b) attribution ("Powered by Keygate", `attribution_text`/`attribution_url`,
   `X-Powered-By`) must not be removed or altered by any new UI or API surface.
-- Existing Stripe behaviour must not regress in phase 1.
+- Stripe files, routes and data are untouched in phase 1: no Stripe API calls are added, no
+  Stripe prices are read or written, and the existing Stripe test suite must stay green.
 - All migrations are additive; no destructive changes to existing tables.
 - API responses use the `{"success":…,"data":…}` / `{"success":false,"error":{…}}` envelope
   except for explicitly documented raw-body routes.
@@ -73,8 +76,9 @@ reconciliation and refunds — and treat providers as interchangeable settlement
 3. Expose a stable, documented API + outbound events so other internal services can create
    payments, read licences/entitlements, and react to payment outcomes without knowing which
    provider was used.
-4. Keep working with Stripe for international customers, without touching Stripe's code path in
-   phase 1.
+4. Ship without Stripe: no Stripe API calls, no price lookup and no backfill in phase 1. The
+   existing Stripe code path is left untouched (and unused by the new flow) so it can be
+   migrated onto the unified domain later.
 5. Give operators the tooling they need: unmatched-transfer queue, manual settlement, refund
    recording, provider health, reports/exports.
 6. Support Vietnamese business requirements: VAT invoices/e-invoice, VND formatting, `vi`
@@ -89,7 +93,9 @@ reconciliation and refunds — and treat providers as interchangeable settlement
 - Full automated refund workflow (approval, provider execution) — phase 1 only records manual
   refunds; the `payment_refunds` table and admin flow are built so execution can be added.
 - Migrating existing Stripe subscriptions/checkouts onto the unified path — phase 2+.
-- Multi-currency for VN rails (VND only). Stripe keeps multi-currency.
+- Any Stripe integration in this phase: reading Stripe prices, importing `stripe_price_id`,
+  calling Stripe APIs or reconciling Stripe payments. Stripe routes stay as-is.
+- Multi-currency for VN rails (VND only).
 - Multi-tenant organisations; "tenancy" remains one install with products, plus per-product
   provider overrides.
 - Coupon stacking, gift cards, proration for downgrades.
@@ -193,17 +199,21 @@ provider ref, amount, currency, occurred-at, raw JSON.
 
 - **Money is never a float.** `amount_minor BIGINT` + `currency CHAR(3)` + `currency_exponent
   SMALLINT` (VND = 0, USD/EUR = 2). Formatting is a presentation concern.
-- `plan_prices` is the new source of truth for price:
+- `plan_prices` is the only source of truth for price in this phase:
   `(plan_id, provider, currency, billing_interval, amount_minor, currency_exponent,
   external_price_id, active)`.
-  - Stripe rows keep `external_price_id = plans.stripe_price_id` after backfill.
-  - VND rows have `external_price_id = ''`.
-- Read path (`GET /api/v1/products/:product_slug/plans`) becomes **local-first** with a Stripe
-  fallback only while the backfill has not run for a plan. The backfill scope is decided in
-  §13.1; whichever option is chosen, the Stripe fallback is removed in phase 2.
+  - VN rows are created by admins (or seeded by migration with the operator's price list) and
+    have `external_price_id = ''`.
+  - `external_price_id` is reserved for a future Stripe adapter; phase 1 never writes a Stripe
+    id and never calls the Stripe API.
+- Read path (`GET /api/v1/products/:product_slug/plans`) is **local-only**: it reads
+  `plan_prices`, never Stripe. A plan with no active `plan_prices` row for the resolved
+  provider/currency is not purchasable and is hidden from the pricing response (no "starting
+  price" placeholder, no `plans.stripe_price_id` fallback). This is intentional: prices must be
+  entered before a plan can be sold.
 - The existing public plans fields keep working (the same `price`/`currency`/interval fields);
-  only the source of the number changes. Stripe checkouts continue to use Stripe's own
-  invoices/receipts — the invoice module in §3.8 applies to VN orders in phase 1.
+  only the source of the number changes. Stripe checkouts are not part of this phase's flow and
+  therefore keep their current (untouched) behaviour for any legacy link.
 - Public plans response: keep the existing top-level `price` (minor units) and `currency` for
   backward compatibility, and add a `prices` array
   (`{provider, amount, currency, currency_exponent, billing_interval}`); the legacy top-level
@@ -516,10 +526,9 @@ The frontend is React 19 + Vite + react-router-dom 7 + TanStack Query + Tailwind
   trial days, scope picker for products and plans, stack group, stackable, priority, assigned
   email, redemption limits, validity), live quote preview, per-coupon usage stats, and a global
   **redemption history** page (filter by coupon/email/date, CSV export).
-- Admin → **Plans**: price rows editor per provider/currency/interval (replaces the raw
-  `stripe_price_id` input as the primary editor; the Stripe price id moves to an
-  "advanced/legacy" field that writes both `plans.stripe_price_id` and the Stripe
-  `plan_prices` row).
+- Admin → **Plans**: price rows editor per provider/currency/interval. It is the primary price
+  editor; `plans.stripe_price_id` stays as a read-only legacy field (clearly labelled "Stripe —
+  unused in this version") and is neither written by the editor nor used by the read path.
 - Admin → **Settings**: payment section pointing at the provider configs, VAT defaults,
   invoice seller block.
 - Portal → orders (pay/renew), invoices (download), billing profile (buyer/tax details).
@@ -546,12 +555,12 @@ column on `payment_orders` instead.
 CREATE TABLE plan_prices (
     id                TEXT PRIMARY KEY,
     plan_id           TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
-    provider          TEXT NOT NULL,                -- 'stripe' | 'sepay' | 'payos'
+    provider          TEXT NOT NULL,                -- phase 1 writes 'sepay' | 'payos'
     currency          CHAR(3) NOT NULL,             -- 'VND', 'USD'
     amount_minor      BIGINT NOT NULL CHECK (amount_minor >= 0),
     currency_exponent SMALLINT NOT NULL DEFAULT 2,
     billing_interval  TEXT NOT NULL DEFAULT '',     -- '', 'month', 'year'
-    external_price_id TEXT NOT NULL DEFAULT '',     -- Stripe price id when provider='stripe'
+    external_price_id TEXT NOT NULL DEFAULT '',     -- reserved for a future Stripe adapter
     active            BOOLEAN NOT NULL DEFAULT TRUE,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -702,7 +711,8 @@ CREATE TABLE payment_refunds (
     amount_minor BIGINT NOT NULL CHECK (amount_minor > 0),
     currency     CHAR(3) NOT NULL,
     reason       TEXT NOT NULL DEFAULT '',
-    method       TEXT NOT NULL CHECK (method IN ('manual','sepay','payos','stripe')),
+    method       TEXT NOT NULL CHECK (method IN ('manual','sepay','payos')),
+                 -- add 'stripe' when the Stripe adapter lands (phase 2+)
     provider_ref TEXT NOT NULL DEFAULT '',
     status       TEXT NOT NULL CHECK (status IN ('requested','pending','succeeded','failed')),
     created_by   TEXT NULL REFERENCES users(id) ON DELETE SET NULL,
@@ -1288,7 +1298,8 @@ Existing `license.*` events keep their current payloads and semantics.
 
 ### Phase 1a — Core rail (first shippable slice)
 
-1. Migrations, in dependency order: `plan_prices` + Stripe backfill; `payment_provider_configs`;
+1. Migrations, in dependency order: `plan_prices` (VN prices entered by admin/seed migration —
+   **no Stripe backfill**); `payment_provider_configs`;
    `coupons` + `coupon_scopes` (tables only — CRUD lands in 1b, created now so migrations stay
    additive and the editor needs no second schema change); `payment_orders`;
    `payment_order_discounts`; `payment_attempts`; `payment_transactions`; `payment_events`;
@@ -1336,23 +1347,23 @@ provider totals.
 - Refund execution: SePay API v2 (VietinBank, idempotency key, async status) + admin approval.
 - PayOS payouts (chi hộ) for refunds/affiliate, approval workflow.
 - E-invoice provider integrations beyond the default adapter.
-- Migrate Stripe checkout/settlement onto the unified path; remove dual price read.
+- Migrate Stripe checkout/settlement onto the unified path (Stripe adapter + optional price
+  mapping); remove the legacy Stripe price read.
 - Optional: multi-merchant per product UI, payout reports, tax reports.
 
-### Backfill and compatibility
+### Price seeding and compatibility
 
-- Backfill script (`cmd/backfill-plan-prices` or admin action) iterates plans with
-  `stripe_price_id`, fetches the Stripe Price, inserts `plan_prices` rows with the correct
-  currency exponent (VND 0, USD/EUR 2), idempotent on `(plan_id, provider, currency,
-  billing_interval)`.
-- Until backfill completes, the public plans endpoint falls back to live Stripe price lookup
-  (current behaviour).
-- `plans.stripe_renewal_price_id` is deliberately not backfilled: the untouched Stripe path
-  keeps reading it directly in phase 1. If phase 2 moves Stripe renewals onto the unified
-  path, `plan_prices` gains a `price_role` (`initial`/`renewal`) column or a separate mapping
-  instead of overloading one row.
-- Rollback: disable provider configs (feature flag) and stop the workers; existing Stripe paths
-  and data are untouched.
+- No Stripe backfill and no Stripe API calls in this phase. Prices are entered through the admin
+  plan-price editor, or pre-loaded with a one-off SQL/seed migration when the operator has a
+  price list ready (`plan_prices` rows for `sepay`/`payos` with `external_price_id = ''`, correct
+  currency exponent, `active = true`).
+- Until a plan has an active `plan_prices` row for a provider/currency it cannot be sold: it is
+  hidden from the public pricing response and checkout returns `PAYMENT_PRICE_NOT_CONFIGURED`.
+  Operators see a "missing price" badge in the admin plan list.
+- `plans.stripe_price_id` / `plans.stripe_renewal_price_id` are left untouched and unread; they
+  are legacy fields for the future Stripe adapter, not a fallback.
+- Rollback: disable provider configs (feature flag) and stop the workers; `plan_prices` rows can
+  be deactivated per provider/currency without touching Stripe data.
 
 ---
 
@@ -1368,17 +1379,17 @@ provider totals.
 | SePay 3 req/s | Reconcile throttling | Global limiter, backoff, page size 100, ascending sort |
 | Bank memo matching is lossy | Unmatched transfers | Order code + VA as primary keys; amount+time only suggests; operator queue |
 | E-invoice vendor dependency | VAT invoices not issued automatically | Adapter + `pending_issue` queue; manual issuance path |
-| Touching `stripe.go` | Regression in revenue path | Phase 1 does not modify Stripe files; unified path only for new providers |
-| Two price sources during migration | Price mismatch between Stripe and local | Backfill + local-first read + fallback; parity check in reports |
+| Touching `stripe.go` | Regression in the legacy path | Phase 1 does not modify Stripe files and never calls the Stripe API; the existing Stripe tests stay green |
+| Plans without local prices | Nothing can be sold until prices are entered | Admin "missing price" badge + `PAYMENT_PRICE_NOT_CONFIGURED`; seed migration option for launch |
 | Refund not automated in phase 1 | Manual ops burden | Record-only refunds with audit; phase 2 execution |
 | VAT inclusive/exclusive ambiguity | Wrong totals/invoices | `products.price_includes_tax` explicit; invoice always shows breakdown |
 | Coupon abuse | Revenue loss | Per-customer limits, max redemptions, one coupon per order, redemption at settlement |
 
 ---
 
-## 13. Resolved decisions and remaining questions
+## 13. Resolved decisions
 
-Decisions taken with the product owner on 2026-11-12:
+Decisions taken with the product owner on 2026-11-12; no open questions remain:
 
 | # | Question | Decision |
 |---|---|---|
@@ -1388,24 +1399,7 @@ Decisions taken with the product owner on 2026-11-12:
 | 4 | Invoice PDF library | Pure-Go (`go-pdf/fpdf` or `gopdf`), final choice in the implementation plan; no headless browser. |
 | 5 | Tax defaults | VAT 10 %, tax-inclusive, default for every product; override per product with `tax_rate_bp` / `price_includes_tax`. |
 | 6 | Return URL allowlist | Phase 1: absolute `https`, no credentials, redirect only; per-API-key allowlist is phase-2 hardening. |
-| 7 | Stripe backfill scope | **Pending owner confirmation** — see §13.1. |
-
-### 13.1 Stripe backfill (open)
-
-`plan_prices` becomes the local source of truth for prices. Existing Stripe plans still keep
-their `plans.stripe_price_id`; the question is how much to copy into `plan_prices` in phase 1a.
-
-- **Option A — backfill every plan that has a Stripe price.** A one-off script (or admin action)
-  lists plans with `stripe_price_id`, fetches each Stripe Price, and inserts the matching
-  `plan_prices` row. The read path then needs no Stripe API call, and the temporary Stripe
-  fallback can be deleted in phase 2.
-- **Option B — backfill only the plans sold in VND now.** Keep the Stripe API fallback for the
-  rest until phase 2. Less data copied now, but the fallback path stays alive longer and the
-  copy must be finished later anyway.
-
-**Recommendation: A.** The migration is mechanical, the fallback is temporary code either way,
-and the read path is simpler to test. If Stripe API access is unavailable during rollout, the
-script is idempotent and can be re-run; the read path already tolerates missing rows.
+| 7 | Stripe in phase 1 | **Not used at all** (owner decision 2026-11-12): no Stripe API calls, no price reads, no `stripe_price_id` import or backfill. Prices live only in `plan_prices`, entered by admins; Stripe files/routes stay untouched for phase 2+. |
 
 ## Appendix A — Provider field reference (verified)
 
