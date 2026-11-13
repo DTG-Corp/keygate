@@ -124,23 +124,35 @@ type PaymentAttempt struct {
 
 // PaymentTransaction is a transfer seen at a provider, matched to an
 // order or left for the unmatched queue. (Provider, ProviderRef) is the
-// dedupe key, so redelivery of the same bank transfer is a no-op. Raw is
-// json.RawMessage, not []byte, so the payload is stored as JSON rather
-// than base64.
+// dedupe key, so redelivery of the same bank transfer is a no-op.
+// Direction separates money in from refunds and payouts ('out'), which
+// the reconciler stores but the order matcher does not consume; the
+// unmatched queue reads Reference and Content, and a manual match
+// records who matched it and when. AttemptID is a pointer for the same
+// reason as OrderID: NULL means "no attempt/order", which no empty
+// string can express. Raw is json.RawMessage, not []byte, so the payload
+// is stored as JSON rather than base64.
 type PaymentTransaction struct {
 	bun.BaseModel `bun:"table:payment_transactions"`
 
-	ID           string          `bun:",pk" json:"id"`
-	Provider     string          `bun:",notnull" json:"provider"`
-	ProviderRef  string          `bun:",notnull" json:"provider_ref"`
-	OrderID      *string         `bun:",nullzero" json:"order_id,omitempty"`
-	AmountMinor  int64           `bun:",notnull" json:"amount_minor"`
-	Currency     string          `bun:",notnull" json:"currency"`
-	Status       string          `bun:",notnull" json:"status"`
-	IgnoreReason string          `bun:",notnull,default:''" json:"ignore_reason"`
-	Raw          json.RawMessage `bun:",notnull,type:jsonb" json:"raw"`
-	OccurredAt   time.Time       `bun:",notnull" json:"occurred_at"`
-	CreatedAt    time.Time       `bun:",nullzero,default:now()" json:"created_at"`
+	ID              string          `bun:",pk" json:"id"`
+	Provider        string          `bun:",notnull" json:"provider"`
+	ProviderRef     string          `bun:",notnull" json:"provider_ref"`
+	OrderID         *string         `bun:",nullzero" json:"order_id,omitempty"`
+	AttemptID       *string         `bun:",nullzero" json:"attempt_id,omitempty"`
+	AmountMinor     int64           `bun:",notnull" json:"amount_minor"`
+	Currency        string          `bun:",notnull" json:"currency"`
+	Direction       string          `bun:",notnull,default:'in'" json:"direction"`
+	ProviderAccount string          `bun:",notnull,default:''" json:"provider_account"`
+	Reference       string          `bun:",notnull,default:''" json:"reference"`
+	Content         string          `bun:",notnull,default:''" json:"content"`
+	Status          string          `bun:",notnull" json:"status"`
+	IgnoreReason    string          `bun:",notnull,default:''" json:"ignore_reason"`
+	MatchedBy       *string         `bun:",nullzero" json:"matched_by,omitempty"`
+	MatchedAt       *time.Time      `json:"matched_at,omitempty"`
+	Raw             json.RawMessage `bun:",notnull,type:jsonb" json:"raw"`
+	OccurredAt      time.Time       `bun:",notnull" json:"occurred_at"`
+	CreatedAt       time.Time       `bun:",nullzero,default:now()" json:"created_at"`
 }
 
 // PaymentEvent is the raw provider payload behind a state change, kept

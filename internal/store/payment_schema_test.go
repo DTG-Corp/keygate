@@ -69,6 +69,67 @@ func paymentSchemaProductAndPlan(t *testing.T, s *store.Store) (*model.Product, 
 	return product, plan
 }
 
+// A whole PaymentOrder round-trips through Bun: the database assigns the
+// identity numeric_code, a VND order stays at currency_exponent 0, the
+// JSONB buyer/metadata read back as objects, and the status is pending.
+// This is the shape T8/T9 write and T11 reads.
+func TestPaymentOrderModelRoundTrip(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	product, plan := paymentSchemaProductAndPlan(t, s)
+
+	order := &model.PaymentOrder{
+		ID:            uuid.NewString(),
+		Code:          "KG-RT-" + uuid.NewString()[:8],
+		ProductID:     product.ID,
+		PlanID:        plan.ID,
+		Email:         "buyer@example.com",
+		Kind:          "new",
+		Quantity:      1,
+		SubtotalMinor: 199000,
+		DiscountMinor: 0,
+		TaxMinor:      0,
+		TotalMinor:    199000,
+		Currency:      "VND",
+		CurrencyExp:   0,
+		TaxRateBP:     0,
+		Provider:      "payos",
+		Status:        "pending",
+		ExpiresAt:     time.Now().UTC().Add(15 * time.Minute),
+		Buyer:         json.RawMessage(`{"name":"A"}`),
+		Metadata:      json.RawMessage(`{"k":"v"}`),
+	}
+	if _, err := s.DB.NewInsert().Model(order).Exec(ctx); err != nil {
+		t.Fatalf("insert payment order: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = s.DB.NewRaw("DELETE FROM payment_orders WHERE id = ?", order.ID).Exec(context.Background())
+	})
+
+	var got model.PaymentOrder
+	if err := s.DB.NewSelect().Model(&got).Where("id = ?", order.ID).Scan(ctx); err != nil {
+		t.Fatalf("select payment order: %v", err)
+	}
+	if got.NumericCode == 0 {
+		t.Fatal("numeric_code = 0, want the identity value the database assigns")
+	}
+	if got.CurrencyExp != 0 {
+		t.Fatalf("currency_exponent = %d, want 0 for VND (Bun fell back to a column default)", got.CurrencyExp)
+	}
+	if got.Status != "pending" {
+		t.Fatalf("status = %q, want pending", got.Status)
+	}
+	for name, raw := range map[string]json.RawMessage{"buyer": got.Buyer, "metadata": got.Metadata} {
+		var obj map[string]any
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			t.Fatalf("%s = %q, want a JSON object: %v", name, raw, err)
+		}
+		if len(obj) == 0 {
+			t.Fatalf("%s = %q, want a non-empty JSON object", name, raw)
+		}
+	}
+}
+
 // A VND price has currency exponent 0. Bun treats a zero field tagged
 // with default: as "use the column default", so an exponent of 0 would
 // be stored as 2 — the tag must not carry default:2.
@@ -200,6 +261,60 @@ func TestPaymentRawStoredAsJSON(t *testing.T) {
 		if len(obj) == 0 {
 			t.Fatalf("%s raw = %q, want a non-empty JSON object", name, raw)
 		}
+	}
+
+	// Direction defaults to 'in' for money received. A reconciler-stored
+	// refund/payout is 'out' and keeps the bank reference, content and
+	// account the unmatched queue displays.
+	outTxn := &model.PaymentTransaction{
+		ID:              uuid.NewString(),
+		Provider:        "sepay",
+		ProviderRef:     uuid.NewString(),
+		AmountMinor:     50000,
+		Currency:        "VND",
+		Direction:       "out",
+		ProviderAccount: "0123456789",
+		Reference:       "REF-OUT-1",
+		Content:         "REFUND KG-1",
+		Status:          "unmatched",
+		Raw:             json.RawMessage(`{"transferType":"out"}`),
+		OccurredAt:      time.Now().UTC(),
+	}
+	if _, err := s.DB.NewInsert().Model(outTxn).Exec(ctx); err != nil {
+		t.Fatalf("insert outgoing transaction: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = s.DB.NewRaw("DELETE FROM payment_transactions WHERE id = ?", outTxn.ID).Exec(context.Background())
+	})
+
+	var inDirection string
+	if err := s.DB.NewRaw(
+		"SELECT direction FROM payment_transactions WHERE id = ?", txn.ID,
+	).Scan(ctx, &inDirection); err != nil {
+		t.Fatalf("read default direction: %v", err)
+	}
+	if inDirection != "in" {
+		t.Fatalf("transaction inserted without direction stored %q, want the 'in' default", inDirection)
+	}
+
+	var stored model.PaymentTransaction
+	if err := s.DB.NewSelect().Model(&stored).Where("id = ?", outTxn.ID).Scan(ctx); err != nil {
+		t.Fatalf("select outgoing transaction: %v", err)
+	}
+	if stored.Direction != "out" {
+		t.Fatalf("direction = %q, want out", stored.Direction)
+	}
+	if stored.ProviderAccount != outTxn.ProviderAccount {
+		t.Fatalf("provider_account = %q, want %q", stored.ProviderAccount, outTxn.ProviderAccount)
+	}
+	if stored.Reference != outTxn.Reference {
+		t.Fatalf("reference = %q, want %q", stored.Reference, outTxn.Reference)
+	}
+	if stored.Content != outTxn.Content {
+		t.Fatalf("content = %q, want %q", stored.Content, outTxn.Content)
+	}
+	if stored.AttemptID != nil || stored.MatchedBy != nil || stored.MatchedAt != nil {
+		t.Fatalf("attempt/matched columns = (%v, %v, %v), want NULL when omitted", stored.AttemptID, stored.MatchedBy, stored.MatchedAt)
 	}
 }
 
