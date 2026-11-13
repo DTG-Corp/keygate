@@ -24,8 +24,14 @@ func TestPublicPlansReadsLocalPrices(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("price plan A: %v", err)
 	}
-	// f.planB is the active plan with no price and self_signup off: not
-	// purchasable, so it must stay hidden.
+	// An active plan in this same product with no price and self_signup
+	// off is not purchasable (no checkout price, no self-service signup),
+	// so it must stay hidden from the catalogue.
+	unpriced := &model.Plan{ProductID: f.prodA.ID, Name: "No price", Slug: "api-unpriced-" + f.suffix,
+		LicenseType: "perpetual", LicenseModel: "standard", MaxActivations: 1, Active: true}
+	if err := f.s.CreatePlan(f.ctx, unpriced); err != nil {
+		t.Fatalf("create unpriced plan: %v", err)
+	}
 
 	inactive := &model.Plan{ProductID: f.prodA.ID, Name: "Retired", Slug: "api-retired-" + f.suffix,
 		LicenseType: "perpetual", LicenseModel: "standard", MaxActivations: 1, Active: false}
@@ -69,7 +75,7 @@ func TestPublicPlansReadsLocalPrices(t *testing.T) {
 	if byID[f.planA.ID] == nil || byID[free.ID] == nil {
 		t.Fatalf("plans = %v, want %s and %s", list, f.planA.ID, free.ID)
 	}
-	if _, hidden := byID[f.planB.ID]; hidden {
+	if _, hidden := byID[unpriced.ID]; hidden {
 		t.Errorf("an unpriced plan without self-signup was listed")
 	}
 	if _, hidden := byID[inactive.ID]; hidden {
