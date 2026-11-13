@@ -4326,7 +4326,19 @@ v1.POST("/webhook/sepay-ipn", middleware.RateLimitByIPScoped("sepay_ipn", 120, t
 v1.POST("/webhook/payos", middleware.RateLimitByIPScoped("payos_webhook", 120, time.Minute), sepayH.HandlePayOS)
 ```
 
-Use the existing IP allowlist middleware only if it is already wired for webhooks; SePay's allowlist is optional (`config.ip_allowlist_enabled`) and is checked inside `ParseBankWebhook` via `AllowedCIDRs`.
+SePay's optional IP allowlist cannot be enforced by `ParseBankWebhook` (it receives headers and body only, no peer address), so phase 1a does not implement it: authenticated webhooks (HMAC or Apikey) are the gate. The admin route's allowlist setting is documented as a phase-1b item in T13.
+
+Because `"none"` auth is only for test mode, reject it for a live config in the handler before parsing:
+
+```go
+if cfg.Mode == "live" && cfg.WebhookAuthMode == "none" {
+	h.Log.Error("sepay webhook: auth mode none is not allowed for live config", "product", cfg.ProductID)
+	c.Status(http.StatusServiceUnavailable)
+	return
+}
+```
+
+Same guard applies to the PayOS route only insofar as all live PayOS webhooks must carry a valid checksum signature (the adapter already fails closed on an empty checksum key).
 
 - [ ] **Step 8: Emit outbound events**
 
@@ -5080,6 +5092,10 @@ type Service struct {
 	Providers ProviderFactory
 	Webhooks  *service.WebhookService
 	Log       *slog.Logger
+	// BaseURL is the public origin (config.BaseURL); PayOS requires
+	// absolute https return/cancel URLs and phase 1a has no server-side
+	// success/cancel routes, so both point at the SPA checkout pages.
+	BaseURL string
 }
 
 type CreateOrderInput struct {
@@ -5163,6 +5179,19 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 	if err != nil {
 		return nil, err
 	}
+	// Reuse a still-payable attempt if this order already has one. This
+	// keeps a retried create from asking PayOS for a duplicate orderCode
+	// and from minting a second QR for the same order.
+	if latest, lerr := s.Store.GetLatestPaymentAttempt(ctx, order.ID); lerr == nil && latest != nil &&
+		latest.Status == domain.AttemptPending &&
+		(latest.QRPayload != "" || latest.CheckoutURL != "") &&
+		latest.ExpiresAt != nil && latest.ExpiresAt.After(time.Now()) {
+		return &OrderResult{Order: order, Attempt: latest}, nil
+	}
+	base := strings.TrimRight(s.BaseURL, "/")
+	if base == "" {
+		base = "http://localhost:9000"
+	}
 	attempt := &model.PaymentAttempt{
 		ID: store.NewID(), OrderID: order.ID, Provider: providerName,
 		Status: domain.AttemptPending, AmountMinor: order.TotalMinor, Currency: currency,
@@ -5172,6 +5201,9 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 		OrderCode: order.Code, NumericCode: order.NumericCode, AmountMinor: order.TotalMinor,
 		Currency: currency, CurrencyExp: order.CurrencyExp, Description: order.Code,
 		Buyer: in.Buyer, ExpiresAt: expiresAt, Config: nil,
+		// PayOS signs and requires both; SePay ignores them.
+		ReturnURL: base + "/checkout/success?code=" + order.Code,
+		CancelURL: base + "/checkout/success?code=" + order.Code + "&canceled=1",
 	})
 	if err != nil {
 		// The order exists but has no payment instruction: leave it
