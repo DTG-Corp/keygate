@@ -16,11 +16,16 @@ import AuditPage from "@/pages/admin/audit"
 import CustomersPage from "@/pages/admin/customers"
 import DashboardPage from "@/pages/admin/dashboard"
 import LicensesPage from "@/pages/admin/licenses"
+import PaymentOrdersPage from "@/pages/admin/payment-orders"
+import PaymentProvidersPage from "@/pages/admin/payment-providers"
+import PaymentUnmatchedPage from "@/pages/admin/payment-unmatched"
+import PlanPricesPage from "@/pages/admin/plan-prices"
 import PlansPage from "@/pages/admin/plans"
 import ProductsPage from "@/pages/admin/products"
 import ReleasesPage from "@/pages/admin/releases"
 import SettingsPage from "@/pages/admin/settings"
 import WebhooksPage from "@/pages/admin/webhooks"
+import CheckoutPayPage from "@/pages/checkout-pay"
 import CheckoutSuccessPage from "@/pages/checkout-success"
 import LoginPage from "@/pages/login"
 import PortalAccountPage from "@/pages/portal/account"
@@ -57,6 +62,7 @@ createRoot(document.getElementById("root")!).render(
                     <Route path="/setup" element={<SetupPage />} />
                     <Route path="/login" element={<LoginPage />} />
                     <Route path="/checkout/success" element={<CheckoutSuccessPage />} />
+                    <Route path="/checkout/pay/:code" element={<CheckoutPayPage />} />
                     <Route path="/accept-invite" element={<AcceptInvitePage />} />
                     <Route path="/signup/:checkoutId" element={<SignupPage />} />
 
@@ -65,6 +71,7 @@ createRoot(document.getElementById("root")!).render(
                       <Route index element={<DashboardPage />} />
                       <Route path="products" element={<ProductsPage />} />
                       <Route path="plans" element={<PlansPage />} />
+                      <Route path="plans/:id/prices" element={<PlanPricesPage />} />
                       <Route path="releases" element={<ReleasesPage />} />
                       <Route path="licenses" element={<LicensesPage />} />
                       <Route path="api-keys" element={<APIKeysPage />} />
@@ -73,6 +80,9 @@ createRoot(document.getElementById("root")!).render(
                       <Route path="analytics" element={<AnalyticsPage />} />
                       <Route path="audit" element={<AuditPage />} />
                       <Route path="customers" element={<CustomersPage />} />
+                      <Route path="payments/providers" element={<PaymentProvidersPage />} />
+                      <Route path="payments/orders" element={<PaymentOrdersPage />} />
+                      <Route path="payments/unmatched" element={<PaymentUnmatchedPage />} />
                       <Route path="settings" element={<SettingsPage />} />
                     </Route>
 

@@ -1,4 +1,5 @@
-const BASE = `${import.meta.env.VITE_API_URL || ""}/api/v1`
+const ROOT = import.meta.env.VITE_API_URL || ""
+const BASE = `${ROOT}/api/v1`
 
 // ServiceUnavailableError means the server could not be reached or could
 // not answer right now: a network failure, a 429 or a 5xx — including a
@@ -134,6 +135,46 @@ function del<T>(path: string) {
   return request<T>(path, { method: "DELETE" })
 }
 
+// publicGet talks to the routes served outside /api/v1 — today only the
+// pay page's status endpoint. The order code is the capability, so no
+// cookie is sent and a 401/403 from an unrelated API can never bounce a
+// payer to the login page. The envelope is read the same way as
+// request()'s.
+async function publicGet<T>(path: string): Promise<T> {
+  let res: Response
+  try {
+    res = await fetch(ROOT + path, { credentials: "omit", headers: { Accept: "application/json" } })
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e)
+    throw new ServiceUnavailableError(`Network error: ${reason}. Is the server reachable?`)
+  }
+
+  const raw = await res.text()
+  let json: any = null
+  if (raw) {
+    try {
+      json = JSON.parse(raw)
+    } catch {
+      // Non-JSON body (a proxy error page, say): the status is still
+      // the useful part below.
+    }
+  }
+
+  if (!res.ok) {
+    const msg =
+      json?.error?.message ||
+      (typeof json?.error === "string" ? json.error : null) ||
+      (raw && raw.length < 200 ? raw : null) ||
+      `Request failed (${res.status}${res.statusText ? ` ${res.statusText}` : ""})`
+    const err = res.status === 429 || res.status >= 500 ? new ServiceUnavailableError(msg) : new Error(msg)
+    throw Object.assign(err, {
+      code: typeof json?.error?.code === "string" ? json.error.code : undefined,
+      details: json?.error?.details && typeof json.error.details === "object" ? json.error.details : undefined,
+    })
+  }
+  return (json?.data !== undefined ? json.data : json) as T
+}
+
 // ─── Site Config (public, no auth) ───
 export const site = {
   config: () => get<Record<string, string>>("/config"),
@@ -201,6 +242,35 @@ export const signup = {
 export const checkout = {
   verify: (sessionId: string) =>
     get<{ status: string; email?: string; kind?: string }>(`/checkout/verify?session_id=${sessionId}`),
+}
+
+// ─── Checkout payments (public, order code only) ───
+// The status route is mounted at the root, not under /api/v1: using the
+// prefixing helpers here would 404.
+export interface PayStatus {
+  code: string
+  status: "pending" | "paid" | "expired" | "canceled" | "refunded" | "partially_refunded"
+  amount_minor: number
+  currency: string
+  currency_exponent: number
+  expires_at: string
+  qr_image_url?: string
+  checkout_url?: string
+  bank?: { bank_name: string; bank_bin?: string; account_no: string; account_name: string }
+  description?: string
+  // The public payload is flat and carries no buyer identity. The
+  // breakdown below is optional: it is only rendered when the server
+  // includes it.
+  subtotal_minor?: number
+  discount_minor?: number
+  tax_minor?: number
+  tax_rate_bp?: number
+}
+
+export const checkoutPay = {
+  // Public: the order code is the capability, exactly like the Stripe
+  // success page's session id. No cookie is sent.
+  status: (code: string) => publicGet<PayStatus>(`/pay/${encodeURIComponent(code)}/status`),
 }
 
 // ─── Invites (public, token-only) ───
@@ -726,6 +796,197 @@ export const admin = {
   publicKeyURL: (productId: string) => `${BASE}/admin/products/${productId}/signing-key/public.pem`,
   tauriPublicKey: (productId: string) =>
     get<{ pubkey: string }>(`/admin/products/${productId}/signing-key/tauri-pubkey`),
+}
+
+// ─── Admin: payments ───
+// The endpoints behind these helpers are the admin payment operations:
+// reconciliation, manual settlement and the provider/price editors.
+
+export interface PaymentOrderRow {
+  id: string
+  numeric_code: number
+  code: string
+  product_id: string
+  plan_id: string
+  price_id?: string
+  license_id?: string
+  email: string
+  kind: string
+  quantity: number
+  subtotal_minor: number
+  discount_minor: number
+  tax_minor: number
+  total_minor: number
+  currency: string
+  currency_exponent: number
+  tax_rate_bp?: number
+  provider: string
+  status: string
+  expires_at: string
+  paid_at?: string
+  period_start?: string
+  period_end?: string
+  created_by_api_key_id?: string
+  last_settlement_error?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface PaymentAttemptRow {
+  id: string
+  order_id: string
+  provider: string
+  provider_ref: string
+  status: string
+  amount_minor: number
+  currency: string
+  qr_payload: string
+  checkout_url: string
+  va_number: string
+  raw?: unknown
+  expires_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface PaymentRefundRow {
+  id: string
+  order_id: string
+  amount_minor: number
+  currency: string
+  reason: string
+  method: string
+  provider_ref: string
+  status: string
+  created_at: string
+}
+
+export interface PaymentTransactionRow {
+  id: string
+  provider: string
+  provider_ref: string
+  order_id?: string
+  attempt_id?: string
+  amount_minor: number
+  currency: string
+  direction: string
+  status: string
+  ignore_reason: string
+  provider_account: string
+  reference: string
+  content: string
+  matched_by?: string
+  matched_at?: string
+  raw?: unknown
+  occurred_at: string
+  created_at: string
+}
+
+export interface PlanPriceRow {
+  id: string
+  plan_id: string
+  provider: string
+  currency: string
+  amount_minor: number
+  currency_exponent: number
+  billing_interval: string
+  external_price_id: string
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+// ProviderRow is the admin projection: it says whether a credential or
+// webhook secret is stored, never what it is. The fields below are the
+// only ones the API returns.
+export interface ProviderRow {
+  id: string
+  provider: string
+  product_id?: string
+  mode: string
+  enabled: boolean
+  config: Record<string, unknown> | null
+  credentials_set: boolean
+  secret_set: boolean
+}
+
+export interface PaymentHealthRow {
+  provider: string
+  enabled: boolean
+  last_event_at?: string
+  unmatched_open: number
+  pending_orders: number
+  last_error?: string
+}
+
+export const adminPayments = {
+  orders: (params: { status?: string; provider?: string; email?: string; limit?: number; offset?: number }) =>
+    get<Paged<{ orders: PaymentOrderRow[] }>>(`/admin/payments/orders?${listQuery(params)}`),
+  order: (code: string) =>
+    get<{
+      order: PaymentOrderRow
+      attempts: PaymentAttemptRow[]
+      transactions: PaymentTransactionRow[]
+      refunds?: PaymentRefundRow[]
+    }>(`/admin/payments/orders/${encodeURIComponent(code)}`),
+  markPaid: (code: string, reason: string) =>
+    post<{ order: PaymentOrderRow }>(`/admin/payments/orders/${encodeURIComponent(code)}/mark-paid`, { reason }),
+  cancel: (code: string) =>
+    post<{ order: PaymentOrderRow }>(`/admin/payments/orders/${encodeURIComponent(code)}/cancel`),
+  refund: (code: string, body: { amount_minor: number; reason: string; method: string }) =>
+    post<{ refund: unknown; order: PaymentOrderRow }>(
+      `/admin/payments/orders/${encodeURIComponent(code)}/refund`,
+      body,
+    ),
+  unmatched: (limit = 50) =>
+    get<{ transactions: PaymentTransactionRow[]; count: number; limit: number }>(
+      `/admin/payments/unmatched?limit=${limit}`,
+    ),
+  match: (id: string, orderCode: string) =>
+    post<{ transaction: PaymentTransactionRow; order: PaymentOrderRow }>(
+      `/admin/payments/transactions/${encodeURIComponent(id)}/match`,
+      { order_code: orderCode },
+    ),
+  ignore: (id: string, reason: string) =>
+    post<{ transaction: PaymentTransactionRow }>(`/admin/payments/transactions/${encodeURIComponent(id)}/ignore`, {
+      reason,
+    }),
+  priceList: (planId: string) => get<{ prices: PlanPriceRow[] }>(`/admin/plans/${encodeURIComponent(planId)}/prices`),
+  // A successful upsert answers with the saved price row, not just its
+  // id: the editor can update its table without a second request.
+  upsertPrice: (
+    planId: string,
+    body: {
+      provider: string
+      currency: string
+      amount_minor: number
+      currency_exponent?: number
+      billing_interval?: string
+    },
+  ) => put<PlanPriceRow>(`/admin/plans/${encodeURIComponent(planId)}/prices`, body),
+  // DELETE deactivates the row and answers 204.
+  deletePrice: (planId: string, priceId: string) =>
+    del<void>(`/admin/plans/${encodeURIComponent(planId)}/prices/${encodeURIComponent(priceId)}`),
+  providers: () => get<{ providers: ProviderRow[] }>("/admin/payments/providers"),
+  // The saved row is returned so the editor does not have to refetch
+  // the list to learn its new id and credential flags.
+  upsertProvider: (body: unknown) => put<ProviderRow>("/admin/payments/providers", body),
+  // The path segment is the provider name ("sepay" | "payos"), not the
+  // config row id: one credential check serves every row of that rail.
+  testProvider: (provider: string, productId?: string) =>
+    post<{ provider: string; mode: string; ok: boolean; error?: string }>(
+      `/admin/payments/providers/${encodeURIComponent(provider)}/test${
+        productId ? `?product_id=${encodeURIComponent(productId)}` : ""
+      }`,
+    ),
+  confirmPayOSWebhook: () =>
+    post<{ provider: string; webhook_url: string; confirmed: boolean }>(
+      "/admin/payments/providers/payos/confirm-webhook",
+    ),
+  // Per-provider health, as described by the reconciliation task. Both
+  // key names are accepted so a small response-shape change does not
+  // blank the panel.
+  health: () => get<{ providers?: PaymentHealthRow[]; health?: PaymentHealthRow[] }>("/admin/payments/health"),
 }
 
 // ─── Types ───
