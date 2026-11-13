@@ -246,17 +246,26 @@ func (w *Worker) reconcileSePay(ctx context.Context) error {
 }
 
 // ingestSePayTransaction records one bank transfer. Money in is matched
-// to an order and settled through Settlement; money out and money that
-// matches nothing is written to the unmatched queue with the memo the
-// operator needs to decide what it was.
+// to an order and settled through Settlement; money out, money with an
+// unknown transfer type, and money that matches nothing is written to
+// the unmatched queue with the memo the operator needs to decide what it
+// was. An amount-only match is a suggestion, not a settlement: the
+// worker records the candidate's code and waits for an operator.
 func (w *Worker) ingestSePayTransaction(ctx context.Context, tx sepay.BankTransaction) error {
 	occurred := tx.TransactionDate
 	if occurred.IsZero() {
 		occurred = time.Now()
 	}
-	direction := strings.ToLower(strings.TrimSpace(tx.TransferType))
-	if direction != "in" && direction != "out" {
-		direction = "in"
+	rawType := strings.TrimSpace(tx.TransferType)
+	direction := strings.ToLower(rawType)
+	knownDirection := direction == "in" || direction == "out"
+	// payment_transactions.direction only admits in/out, so a type we do
+	// not understand is stored under the schema's fallback. It is never
+	// treated as incoming: the branch below records it unmatched, and
+	// raw.transfer_type plus the reason keep the provider's own value.
+	storedDirection := direction
+	if !knownDirection {
+		storedDirection = "in"
 	}
 	raw, _ := json.Marshal(map[string]any{
 		"source": "reconcile", "id": tx.ID, "transaction_date": occurred,
@@ -267,34 +276,45 @@ func (w *Worker) ingestSePayTransaction(ctx context.Context, tx sepay.BankTransa
 	ev := provider.WebhookEvent{
 		Provider: "sepay", ProviderEventID: "sepay-api-" + strconv.FormatInt(tx.ID, 10),
 		ProviderRef: strconv.FormatInt(tx.ID, 10), AmountMinor: tx.TransferAmount,
-		Currency: "VND", OccurredAt: occurred, TransferType: direction, Raw: raw,
+		Currency: "VND", OccurredAt: occurred, TransferType: rawType, Raw: raw,
 	}
 
 	reason := ""
-	if direction == "out" {
+	switch {
+	case !knownDirection:
+		// SePay should only say in or out. Anything else is money the
+		// pass cannot classify; even a memo naming an order must not
+		// turn it into a payment.
+		reason = fmt.Sprintf("unknown bank transfer_type %q; recorded for an operator (nothing settled)", rawType)
+	case direction == "out":
 		// A refund or a payout leaves the account. It is never money for
 		// an order: the operator queue is where it belongs.
 		reason = "bank transfer out of the account (refund or payout); no order is settled"
-	} else {
+	default:
 		ev.OrderCode = sepayOrderCode(tx)
-		order, ambiguous, err := w.Matcher.Match(ctx, "sepay", ev)
+		order, kind, err := w.Matcher.Match(ctx, "sepay", ev)
 		if err != nil {
 			return err
 		}
-		if order != nil {
+		switch kind {
+		case MatchCode:
 			ev.Status = domain.OrderPaid
 			return w.Settlement.Settle(ctx, order.ID, "sepay", ev)
-		}
-		if ambiguous {
+		case MatchSuggestion:
+			// The amount and window fit one pending order, but the
+			// transfer did not name it. Only an operator can turn that
+			// coincidence into a licence.
+			reason = fmt.Sprintf("amount-only suggestion: suggested=%s; operator confirmation required", order.Code)
+		case MatchAmbiguous:
 			reason = "ambiguous: more than one pending order has this amount in the matching window"
-		} else {
+		default:
 			reason = "no pending order matched this transfer"
 		}
 	}
 
 	_, _, err := w.Store.InsertPaymentTransaction(ctx, nil, store.PaymentTransactionInput{
 		Provider: "sepay", ProviderRef: ev.ProviderRef,
-		AmountMinor: tx.TransferAmount, Currency: "VND", Direction: direction,
+		AmountMinor: tx.TransferAmount, Currency: "VND", Direction: storedDirection,
 		ProviderAccount: tx.AccountNumber, Reference: tx.ReferenceCode, Content: tx.Content,
 		Status: domain.TxUnmatched, IgnoreReason: reason, Raw: raw, OccurredAt: occurred,
 	})
@@ -313,25 +333,44 @@ func sepayOrderCode(tx sepay.BankTransaction) string {
 }
 
 // extractOrderCodeFromText finds the first KG + 6 Crockford characters
-// that stands as its own token, so "KG7F3K2Q ca phe" matches but
-// "XKG7F3K2Q" does not. A code embedded in a longer run of letters or
-// digits is some other identifier that happens to look like ours.
+// that stands as its own token, so "KG7F3K2Q ca phe" and a customer's
+// lowercase "kg7f3k2q" both match, while "XKG7F3K2Q" does not. Case is
+// normalised before validation, but the boundary is checked against the
+// original text: a code glued to a longer letter/digit run is some other
+// identifier that happens to look like ours.
 func extractOrderCodeFromText(s string) string {
 	for i := 0; i+8 <= len(s); i++ {
 		if i > 0 && isCodeTokenChar(s[i-1]) {
 			continue
 		}
-		if code := s[i : i+8]; domain.IsOrderCode(code) {
-			if i+8 == len(s) || !isCodeTokenChar(s[i+8]) {
-				return code
-			}
+		code := upperASCIICode(s[i : i+8])
+		if !domain.IsOrderCode(code) {
+			continue
+		}
+		if i+8 == len(s) || !isCodeTokenChar(s[i+8]) {
+			return code
 		}
 	}
 	return ""
 }
 
+// upperASCIICode uppercases only ASCII letters. The window is a byte
+// slice of a memo that may hold Vietnamese text; strings.ToUpper could
+// change its byte length and break the boundary index.
+func upperASCIICode(window string) string {
+	var b [8]byte
+	for i := 0; i < len(window); i++ {
+		c := window[i]
+		if c >= 'a' && c <= 'z' {
+			c -= 'a' - 'A'
+		}
+		b[i] = c
+	}
+	return string(b[:len(window)])
+}
+
 func isCodeTokenChar(b byte) bool {
-	return b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
+	return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z' || b >= '0' && b <= '9'
 }
 
 // queryPayOSPaymentLink is the real PayOS query, built from the resolved

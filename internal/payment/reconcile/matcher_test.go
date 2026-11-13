@@ -78,14 +78,16 @@ func (f *matchFixture) order(email string, amount int64, providerName string) *m
 	return o
 }
 
-// match runs the matcher for a SePay transfer.
-func (f *matchFixture) match(ev provider.WebhookEvent) (*model.PaymentOrder, bool) {
+// match runs the matcher for a SePay transfer and returns the order
+// plus the evidence behind the answer: a code match is safe to settle,
+// an amount match is only a suggestion.
+func (f *matchFixture) match(ev provider.WebhookEvent) (*model.PaymentOrder, reconcile.MatchKind) {
 	f.t.Helper()
-	order, ambiguous, err := (&reconcile.Matcher{Store: f.s}).Match(f.ctx, ev.Provider, ev)
+	order, kind, err := (&reconcile.Matcher{Store: f.s}).Match(f.ctx, ev.Provider, ev)
 	if err != nil {
 		f.t.Fatalf("match: %v", err)
 	}
-	return order, ambiguous
+	return order, kind
 }
 
 // The order code is the only positive answer: two pending orders of the
@@ -95,12 +97,12 @@ func TestMatcherExactCodeWins(t *testing.T) {
 	first := f.order("first-"+uuid.NewString()+"@example.com", f.amount, "sepay")
 	second := f.order("second-"+uuid.NewString()+"@example.com", f.amount, "sepay")
 
-	order, ambiguous := f.match(provider.WebhookEvent{
+	order, kind := f.match(provider.WebhookEvent{
 		Provider: "sepay", OrderCode: second.Code, AmountMinor: f.amount,
 		OccurredAt: time.Now(),
 	})
-	if ambiguous {
-		t.Fatal("a coded transfer reported ambiguity")
+	if kind != reconcile.MatchCode {
+		t.Fatalf("kind = %v, want a code match", kind)
 	}
 	if order == nil || order.ID != second.ID {
 		t.Fatalf("match = %+v, want order %s (not %s)", order, second.Code, first.Code)
@@ -116,12 +118,12 @@ func TestMatcherCodeOfClosedOrderIsNotAMatch(t *testing.T) {
 		t.Fatalf("cancel: %v", err)
 	}
 
-	got, ambiguous := f.match(provider.WebhookEvent{
+	got, kind := f.match(provider.WebhookEvent{
 		Provider: "sepay", OrderCode: order.Code, AmountMinor: f.amount,
 		OccurredAt: time.Now(),
 	})
-	if got != nil || ambiguous {
-		t.Fatalf("match = %+v, ambiguous=%v; want no match", got, ambiguous)
+	if got != nil || kind != reconcile.MatchNone {
+		t.Fatalf("match = %+v, kind=%v; want no match", got, kind)
 	}
 }
 
@@ -131,12 +133,12 @@ func TestMatcherCodeOfAnotherProviderIsNotAMatch(t *testing.T) {
 	f := newMatchFixture(t)
 	order := f.order("other-rail-"+uuid.NewString()+"@example.com", f.amount, "payos")
 
-	got, ambiguous := f.match(provider.WebhookEvent{
+	got, kind := f.match(provider.WebhookEvent{
 		Provider: "sepay", OrderCode: order.Code, AmountMinor: f.amount,
 		OccurredAt: time.Now(),
 	})
-	if got != nil || ambiguous {
-		t.Fatalf("match = %+v, ambiguous=%v; want no match", got, ambiguous)
+	if got != nil || kind != reconcile.MatchNone {
+		t.Fatalf("match = %+v, kind=%v; want no match", got, kind)
 	}
 }
 
@@ -149,28 +151,28 @@ func TestMatcherUnknownCodeDoesNotFallBackToAmount(t *testing.T) {
 	order := f.order("unknown-code-"+uuid.NewString()+"@example.com", f.amount, "sepay")
 	_ = order
 
-	got, ambiguous := f.match(provider.WebhookEvent{
+	got, kind := f.match(provider.WebhookEvent{
 		Provider: "sepay", OrderCode: "KGZZZZZZ", AmountMinor: f.amount,
 		OccurredAt: time.Now(),
 	})
-	if got != nil || ambiguous {
-		t.Fatalf("match = %+v, ambiguous=%v; want no match", got, ambiguous)
+	if got != nil || kind != reconcile.MatchNone {
+		t.Fatalf("match = %+v, kind=%v; want no match", got, kind)
 	}
 }
 
 // Without a code, an amount that fits exactly one recent pending order is
-// a suggestion the operator can confirm.
-func TestMatcherAmountAndWindowSingleCandidate(t *testing.T) {
+// a suggestion the operator can confirm — never an authoritative match.
+func TestMatcherAmountAndWindowIsOnlyASuggestion(t *testing.T) {
 	f := newMatchFixture(t)
 	wanted := f.order("window-"+uuid.NewString()+"@example.com", f.amount, "sepay")
 	f.order("window-other-"+uuid.NewString()+"@example.com", f.amount+7, "sepay")
 
-	order, ambiguous := f.match(provider.WebhookEvent{
+	order, kind := f.match(provider.WebhookEvent{
 		Provider: "sepay", AmountMinor: f.amount,
 		OccurredAt: wanted.CreatedAt.Add(10 * time.Minute),
 	})
-	if ambiguous {
-		t.Fatal("a single amount match reported ambiguity")
+	if kind != reconcile.MatchSuggestion {
+		t.Fatalf("kind = %v, want a suggestion", kind)
 	}
 	if order == nil || order.ID != wanted.ID {
 		t.Fatalf("match = %+v, want order %s", order, wanted.Code)
@@ -183,12 +185,12 @@ func TestMatcherAmountOutsideWindowIsNotAMatch(t *testing.T) {
 	f := newMatchFixture(t)
 	order := f.order("outside-"+uuid.NewString()+"@example.com", f.amount, "sepay")
 
-	got, ambiguous := f.match(provider.WebhookEvent{
+	got, kind := f.match(provider.WebhookEvent{
 		Provider: "sepay", AmountMinor: f.amount,
 		OccurredAt: order.CreatedAt.Add(-2 * time.Hour),
 	})
-	if got != nil || ambiguous {
-		t.Fatalf("match = %+v, ambiguous=%v; want no match", got, ambiguous)
+	if got != nil || kind != reconcile.MatchNone {
+		t.Fatalf("match = %+v, kind=%v; want no match", got, kind)
 	}
 }
 
@@ -199,11 +201,11 @@ func TestMatcherAmbiguousAmountMatch(t *testing.T) {
 	f.order("amb-a-"+uuid.NewString()+"@example.com", f.amount, "sepay")
 	f.order("amb-b-"+uuid.NewString()+"@example.com", f.amount, "sepay")
 
-	got, ambiguous := f.match(provider.WebhookEvent{
+	got, kind := f.match(provider.WebhookEvent{
 		Provider: "sepay", AmountMinor: f.amount, OccurredAt: time.Now(),
 	})
-	if got != nil || !ambiguous {
-		t.Fatalf("match = %+v, ambiguous=%v; want ambiguity", got, ambiguous)
+	if got != nil || kind != reconcile.MatchAmbiguous {
+		t.Fatalf("match = %+v, kind=%v; want ambiguity", got, kind)
 	}
 }
 
@@ -214,10 +216,10 @@ func TestMatcherZeroAmountNeverMatches(t *testing.T) {
 	f.order("zero-a-"+uuid.NewString()+"@example.com", 0, "sepay")
 	f.order("zero-b-"+uuid.NewString()+"@example.com", 0, "sepay")
 
-	got, ambiguous := f.match(provider.WebhookEvent{
+	got, kind := f.match(provider.WebhookEvent{
 		Provider: "sepay", AmountMinor: 0, OccurredAt: time.Now(),
 	})
-	if got != nil || ambiguous {
-		t.Fatalf("zero-amount match = %+v, ambiguous=%v; want no match", got, ambiguous)
+	if got != nil || kind != reconcile.MatchNone {
+		t.Fatalf("zero-amount match = %+v, kind=%v; want no match", got, kind)
 	}
 }

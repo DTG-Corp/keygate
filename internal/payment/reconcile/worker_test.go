@@ -3,9 +3,11 @@ package reconcile_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -156,6 +158,17 @@ func (f *workerFixture) countTransactions(ref string) int {
 		f.t.Fatal(err)
 	}
 	return n
+}
+
+// transactionByRef reads the one row a bank transfer id was recorded as.
+func (f *workerFixture) transactionByRef(ref string) *model.PaymentTransaction {
+	f.t.Helper()
+	row := new(model.PaymentTransaction)
+	if err := f.s.DB.NewSelect().Model(row).
+		Where("provider = ?", "sepay").Where("provider_ref = ?", ref).Scan(f.ctx); err != nil {
+		f.t.Fatalf("read transaction %s: %v", ref, err)
+	}
+	return row
 }
 
 // fakePayOS answers the payment-link query from a map and records every
@@ -466,5 +479,129 @@ func TestWorkerTickWithoutConfigOnlyExpires(t *testing.T) {
 	// No provider row means no credentials, so no pull and no grant.
 	if got := f.reload(pending.Code).Status; got != domain.OrderPending {
 		t.Fatalf("pending order = %q, want pending: a config-less worker settled something", got)
+	}
+}
+
+// A single pending order of the transfer's amount is a suggestion, not a
+// match. The worker must leave the order pending and queue the transfer
+// with the candidate's code so an operator can confirm it.
+func TestWorkerTickAmountOnlySuggestionIsQueuedNotSettled(t *testing.T) {
+	f := newWorkerFixture(t)
+	f.sepayConfig()
+	f.deleteTransactions("920001")
+	f.t.Cleanup(func() { f.deleteTransactions("920001") })
+	order := f.order("suggest-"+uuid.NewString()+"@example.com", f.amount, "sepay")
+	ref := "worker-suggest-" + uuid.NewString()
+	fake := &fakeSePay{rows: []sepay.BankTransaction{{
+		ID: 920001, TransactionDate: time.Now().Add(-time.Minute), AccountNumber: "0978482700",
+		Content: "chuyen tien", TransferType: "in", TransferAmount: f.amount, ReferenceCode: ref,
+	}}}
+	w := f.worker()
+	w.ListTransactions = fake.list
+	if err := w.Tick(f.ctx); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := f.reload(order.Code).Status; got != domain.OrderPending {
+		t.Fatalf("order = %q, want pending: an amount-only suggestion settled the order", got)
+	}
+	if n := f.countLicences(); n != 0 {
+		t.Fatalf("licences = %d, want 0: an amount-only suggestion granted", n)
+	}
+	tx := f.transactionByRef("920001")
+	if tx.Status != domain.TxUnmatched {
+		t.Fatalf("transaction status = %q, want unmatched", tx.Status)
+	}
+	if !strings.Contains(tx.IgnoreReason, "suggested="+order.Code) {
+		t.Fatalf("ignore reason = %q, want suggested=%s", tx.IgnoreReason, order.Code)
+	}
+	if tx.Reference != ref {
+		t.Fatalf("reference = %q, want %q", tx.Reference, ref)
+	}
+}
+
+// SePay should only ever say in or out. A blank or unknown transfer type
+// is money the worker cannot classify: it is never treated as incoming,
+// even when the memo names an order, and the raw type is kept for the
+// operator.
+func TestWorkerTickUnknownTransferTypeIsQueuedNotSettled(t *testing.T) {
+	for _, transferType := range []string{"", "other"} {
+		name := transferType
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newWorkerFixture(t)
+			f.sepayConfig()
+			bankID := time.Now().UnixNano()/1000 + int64(len(transferType))
+			ref := "worker-unknown-" + uuid.NewString()
+			f.deleteTransactions(strconv.FormatInt(bankID, 10))
+			f.t.Cleanup(func() { f.deleteTransactions(strconv.FormatInt(bankID, 10)) })
+			order := f.order("unknown-type-"+uuid.NewString()+"@example.com", f.amount, "sepay")
+			fake := &fakeSePay{rows: []sepay.BankTransaction{{
+				ID: bankID, TransactionDate: time.Now().Add(-time.Minute), AccountNumber: "0978482700",
+				Content: "chuyen tien " + order.Code, TransferType: transferType,
+				TransferAmount: f.amount, ReferenceCode: ref,
+			}}}
+			w := f.worker()
+			w.ListTransactions = fake.list
+			if err := w.Tick(f.ctx); err != nil {
+				t.Fatalf("tick: %v", err)
+			}
+			if got := f.reload(order.Code).Status; got != domain.OrderPending {
+				t.Fatalf("order = %q, want pending: an unknown transfer type settled it", got)
+			}
+			if n := f.countLicences(); n != 0 {
+				t.Fatalf("licences = %d, want 0", n)
+			}
+			tx := f.transactionByRef(strconv.FormatInt(bankID, 10))
+			if tx.Status != domain.TxUnmatched {
+				t.Fatalf("transaction status = %q, want unmatched", tx.Status)
+			}
+			if !strings.Contains(strings.ToLower(tx.IgnoreReason), "transfer_type") {
+				t.Fatalf("ignore reason = %q, want the raw transfer type named", tx.IgnoreReason)
+			}
+			var raw map[string]any
+			if err := json.Unmarshal(tx.Raw, &raw); err != nil || raw["transfer_type"] != transferType {
+				t.Fatalf("raw = %s, want transfer_type %q", tx.Raw, transferType)
+			}
+		})
+	}
+}
+
+// A bank memo is written by a human: the code may be lowercase. Matching
+// normalises it, but the token boundary still stops a code glued to a
+// longer identifier from matching.
+func TestWorkerTickMemoCodeIsCaseInsensitiveAndTokenBounded(t *testing.T) {
+	f := newWorkerFixture(t)
+	f.sepayConfig()
+	f.deleteTransactions("930001", "930002")
+	f.t.Cleanup(func() { f.deleteTransactions("930001", "930002") })
+	order := f.order("lower-"+uuid.NewString()+"@example.com", f.amount, "sepay")
+	noise := f.order("noise-"+uuid.NewString()+"@example.com", f.amount+7, "sepay")
+	occurred := time.Now().Add(-time.Minute)
+	fake := &fakeSePay{rows: []sepay.BankTransaction{
+		{ID: 930001, TransactionDate: occurred, AccountNumber: "0978482700",
+			Content: "chuyen tien " + strings.ToLower(order.Code), TransferType: "in",
+			TransferAmount: f.amount, ReferenceCode: "worker-lower-" + uuid.NewString()},
+		{ID: 930002, TransactionDate: occurred.Add(time.Second), AccountNumber: "0978482700",
+			Content: "tracking" + noise.Code, TransferType: "in",
+			TransferAmount: f.amount + 7, ReferenceCode: "worker-noise-" + uuid.NewString()},
+	}}
+	w := f.worker()
+	w.ListTransactions = fake.list
+	if err := w.Tick(f.ctx); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := f.reload(order.Code).Status; got != domain.OrderPaid {
+		t.Fatalf("lowercase memo order = %q, want paid", got)
+	}
+	if got := f.reload(noise.Code).Status; got != domain.OrderPending {
+		t.Fatalf("embedded code order = %q, want pending: a token boundary was lost", got)
+	}
+	if n := f.countLicences(); n != 1 {
+		t.Fatalf("licences = %d, want 1", n)
+	}
+	if got := f.transactionByRef("930002").Status; got != domain.TxUnmatched {
+		t.Fatalf("noise transaction = %q, want unmatched", got)
 	}
 }

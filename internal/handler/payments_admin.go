@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/tabloy/keygate/internal/model"
 	"github.com/tabloy/keygate/internal/payment/checkout"
@@ -242,12 +243,8 @@ func (h *PaymentsAdminHandler) MarkPaid(c *gin.Context) {
 		response.Err(c, http.StatusConflict, "PAYMENT_ORDER_NOT_PAYABLE", "order is already paid or closed")
 		return
 	}
-	if h.Config != nil {
-		if cfg, err := h.Config.Resolve(c, order.ProductID, order.Provider, ""); err == nil && cfg.Mode == "live" {
-			response.Err(c, http.StatusConflict, "PAYMENT_MANUAL_SETTLEMENT_FORBIDDEN",
-				"manual settlement is disabled for a live payment provider")
-			return
-		}
+	if !h.manualSettlementIsTestOnly(c, order) {
+		return
 	}
 	raw, _ := json.Marshal(map[string]any{
 		"source": "manual", "manual": true, "reason": req.Reason, "admin_id": adminID(c),
@@ -327,7 +324,9 @@ func (h *PaymentsAdminHandler) RefundOrder(c *gin.Context) {
 	refund := &model.PaymentRefund{
 		OrderID: order.ID, AmountMinor: req.AmountMinor, Currency: strings.TrimSpace(order.Currency),
 		Reason: strings.TrimSpace(req.Reason), Method: method, ProviderRef: strings.TrimSpace(req.ProviderRef),
-		CreatedBy: adminID(c),
+		// The FK-bearing column accepts a user id or NULL, not an
+		// "apikey:<id>" principal. The audit line below keeps that id.
+		CreatedBy: actorUserID(c),
 	}
 	if err := h.Store.RecordPaymentRefund(c, refund); err != nil {
 		switch {
@@ -352,7 +351,7 @@ func (h *PaymentsAdminHandler) RefundOrder(c *gin.Context) {
 	}
 	h.audit(c, order, "refunded", map[string]any{
 		"refund_id": refund.ID, "amount_minor": refund.AmountMinor,
-		"method": refund.Method, "status": reloaded.Status,
+		"method": refund.Method, "status": reloaded.Status, "actor": adminID(c),
 	})
 	response.OK(c, gin.H{"refund": refund, "order": adminOrderViewOf(reloaded, false)})
 }
@@ -421,6 +420,14 @@ func (h *PaymentsAdminHandler) MatchTransaction(c *gin.Context) {
 			"only an unmatched transaction can be linked to an order")
 		return
 	}
+	if !strings.EqualFold(strings.TrimSpace(tx.Direction), "in") {
+		// The worker stores payouts as direction=out. A payout is money
+		// leaving the account; it can never pay for an order, whatever
+		// its amount says.
+		response.Err(c, http.StatusUnprocessableEntity, "PAYMENT_TRANSACTION_NOT_INCOMING",
+			"only an incoming transfer can be matched to an order")
+		return
+	}
 	var req struct {
 		OrderCode string `json:"order_code"`
 	}
@@ -470,7 +477,7 @@ func (h *PaymentsAdminHandler) MatchTransaction(c *gin.Context) {
 	// asked for it is best effort: failing the request here would tell
 	// the operator the match did not happen when the order is already
 	// paid, so the attribution failure is logged instead.
-	if err := h.Store.RecordTransactionMatchedBy(c, tx.ID, adminID(c)); err != nil {
+	if err := h.Store.RecordTransactionMatchedBy(c, tx.ID, actorUserID(c)); err != nil {
 		slog.Warn("manual match: settlement succeeded but the operator stamp failed",
 			"transaction_id", tx.ID, "error", err)
 	}
@@ -484,7 +491,9 @@ func (h *PaymentsAdminHandler) MatchTransaction(c *gin.Context) {
 		response.Internal(c, err)
 		return
 	}
-	h.audit(c, reloadedOrder, "transaction_matched", map[string]any{"transaction_id": tx.ID})
+	h.audit(c, reloadedOrder, "transaction_matched", map[string]any{
+		"transaction_id": tx.ID, "actor": adminID(c),
+	})
 	response.OK(c, gin.H{
 		"transaction": adminTransactionViewOf(reloadedTx, true),
 		"order":       adminOrderViewOf(reloadedOrder, false),
@@ -705,6 +714,71 @@ func (h *PaymentsAdminHandler) transaction(c *gin.Context) (*model.PaymentTransa
 		return nil, false
 	}
 	return tx, true
+}
+
+// manualSettlementIsTestOnly is mark-paid's fail-closed guard. The order
+// does not store the provider mode it was created under, and resolving
+// with the server's current default can miss a product override. So a
+// live row for this order's rail (install-wide or its product's override)
+// refuses the operation outright; a config that cannot be resolved
+// refuses too. Only a resolvable test configuration allows a licence to
+// be granted without money moving through a provider. A handler built
+// without a config service (a developer install with no master key) has
+// no rail to check and keeps the plan's rehearsal path.
+func (h *PaymentsAdminHandler) manualSettlementIsTestOnly(c *gin.Context, order *model.PaymentOrder) bool {
+	if h.Config == nil {
+		return true
+	}
+	rows, err := h.Config.List(c)
+	if err != nil {
+		response.Internal(c, err)
+		return false
+	}
+	providerName := strings.ToLower(strings.TrimSpace(order.Provider))
+	for _, row := range rows {
+		if !row.Enabled || !strings.EqualFold(row.Provider, providerName) {
+			continue
+		}
+		// An install-wide row covers every product; a product row only
+		// covers its own.
+		if row.ProductID != "" && row.ProductID != order.ProductID {
+			continue
+		}
+		if row.Mode == "live" {
+			response.Err(c, http.StatusConflict, "PAYMENT_MANUAL_SETTLEMENT_FORBIDDEN",
+				"manual settlement is disabled: a live payment provider is configured for this order")
+			return false
+		}
+	}
+	cfg, err := h.Config.Resolve(c, order.ProductID, order.Provider, "")
+	if err != nil {
+		// Disabled, deleted, broken or missing: an unverifiable rail is
+		// not a test rail, and manual settlement is refused rather than
+		// granting a licence on a config the operator cannot see.
+		response.Err(c, http.StatusUnprocessableEntity, "PAYMENT_MANUAL_SETTLEMENT_UNVERIFIABLE",
+			"manual settlement needs a usable test payment provider configuration for this order")
+		return false
+	}
+	if cfg.Mode != "test" {
+		response.Err(c, http.StatusConflict, "PAYMENT_MANUAL_SETTLEMENT_FORBIDDEN",
+			"manual settlement is disabled for a live payment provider")
+		return false
+	}
+	return true
+}
+
+// actorUserID is the signed-in user behind an operator action, or "" for
+// an API key. payment_refunds.created_by and
+// payment_transactions.matched_by reference users(id); an API key's
+// "apikey:<id>" principal is not a user id, and passing it would fail the
+// write after the money decision was already made. The audit event keeps
+// the full principal in its payload either way.
+func actorUserID(c *gin.Context) string {
+	id := adminID(c)
+	if _, err := uuid.Parse(id); err != nil {
+		return ""
+	}
+	return id
 }
 
 // writeAdminSettlementError maps the settlement sentinels the admin

@@ -841,3 +841,199 @@ func (f *apiFixture) callList(fn gin.HandlerFunc, target string) map[string]any 
 	}
 	return env.Data
 }
+
+// ─── fix round 1: fail-closed mark-paid ───
+
+// sepayTestConfig writes one provider row for the order's rail and
+// returns the resolver wired to the server's default mode. The caller
+// names the row's own mode: those two deliberately differ in the
+// live-row-under-a-test-server cases below.
+func sepayTestConfig(t *testing.T, f *apiFixture, mode string, enabled bool, productID string) *providercfg.Service {
+	t.Helper()
+	codec, err := providercfg.NewCodec(bytes.Repeat([]byte{0x66}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.cleanupProviderConfigSlots(t, providerConfigSlot{Provider: "sepay", ProductID: productID, Mode: mode})
+	svc := providercfg.NewService(f.s, codec, "test")
+	if _, err := svc.Upsert(f.ctx, providercfg.UpsertInput{
+		Provider: "sepay", ProductID: productID, Mode: mode, Enabled: enabled,
+		Config:        providercfg.SepayConfig{BankName: "MB Bank", BankCode: "MB", AccountNo: "0978482700", AccountName: "NGUYEN VAN A"},
+		Credentials:   providercfg.SepayCredentials{APIToken: "tok-" + uuid.NewString()[:8]},
+		WebhookSecret: "whsec-" + uuid.NewString()[:8],
+	}); err != nil {
+		t.Fatalf("upsert sepay config: %v", err)
+	}
+	return svc
+}
+
+// A disabled provider row must refuse manual settlement rather than
+// skip the guard: an unresolvable config is exactly when a licence must
+// not be granted by hand.
+func TestAdminMarkPaidRefusesDisabledProviderConfig(t *testing.T) {
+	f := newAPIFixture(t)
+	svc := sepayTestConfig(t, f, "test", false, "")
+	order := f.adminOrder(t, "sepay", 1234)
+	h := adminPayments(f)
+	h.Config = svc
+
+	code, out := f.call(h.MarkPaid, http.MethodPost, "/api/v1/admin/payments/orders/"+order.Code+"/mark-paid",
+		`{"reason":"operator says so"}`, nil, gin.Param{Key: "code", Value: order.Code})
+	if code != http.StatusUnprocessableEntity || errCode(out) != "PAYMENT_MANUAL_SETTLEMENT_UNVERIFIABLE" {
+		t.Fatalf("disabled config mark paid = %d %v, want 422 PAYMENT_MANUAL_SETTLEMENT_UNVERIFIABLE", code, out)
+	}
+	if got, _ := f.s.GetPaymentOrderByCode(f.ctx, order.Code); got.Status != domain.OrderPending {
+		t.Fatalf("order = %q, want pending", got.Status)
+	}
+	if n, _ := f.s.DB.NewSelect().Table("licenses").Where("id = ?", order.ID).Count(f.ctx); n != 0 {
+		t.Fatalf("licences = %d, want 0", n)
+	}
+}
+
+// The server may be running with PAYMENT_MODE=test while a live row
+// exists for the order's product. The order does not record the mode it
+// was created in, so a live row anywhere on that rail is proof enough
+// that a manual settlement is not provably a rehearsal: refuse it.
+func TestAdminMarkPaidRefusesLiveRowOnTestServer(t *testing.T) {
+	f := newAPIFixture(t)
+	svc := sepayTestConfig(t, f, "live", true, f.prodA.ID)
+	order := f.adminOrder(t, "sepay", 4321)
+	h := adminPayments(f)
+	h.Config = svc
+
+	code, out := f.call(h.MarkPaid, http.MethodPost, "/api/v1/admin/payments/orders/"+order.Code+"/mark-paid",
+		`{"reason":"operator says so"}`, nil, gin.Param{Key: "code", Value: order.Code})
+	if code != http.StatusConflict || errCode(out) != "PAYMENT_MANUAL_SETTLEMENT_FORBIDDEN" {
+		t.Fatalf("live row on test server = %d %v, want 409 PAYMENT_MANUAL_SETTLEMENT_FORBIDDEN", code, out)
+	}
+	if got, _ := f.s.GetPaymentOrderByCode(f.ctx, order.Code); got.Status != domain.OrderPending {
+		t.Fatalf("order = %q, want pending", got.Status)
+	}
+	if n, _ := f.s.DB.NewSelect().Table("licenses").Where("id = ?", order.ID).Count(f.ctx); n != 0 {
+		t.Fatalf("licences = %d, want 0", n)
+	}
+}
+
+// A resolvable test row is the rehearsal case the operation exists for.
+func TestAdminMarkPaidAllowsTestProviderConfig(t *testing.T) {
+	f := newAPIFixture(t)
+	svc := sepayTestConfig(t, f, "test", true, "")
+	order := f.adminOrder(t, "sepay", 5678)
+	h := adminPayments(f)
+	h.Config = svc
+
+	code, out := f.call(h.MarkPaid, http.MethodPost, "/api/v1/admin/payments/orders/"+order.Code+"/mark-paid",
+		`{"reason":"rehearsal"}`, nil, gin.Param{Key: "code", Value: order.Code})
+	if code != http.StatusOK {
+		t.Fatalf("test config mark paid = %d %v, want 200", code, out)
+	}
+	if got, _ := f.s.GetPaymentOrderByCode(f.ctx, order.Code); got.Status != domain.OrderPaid {
+		t.Fatalf("order = %q, want paid", got.Status)
+	}
+}
+
+// ─── fix round 1: match direction and API-key actors ───
+
+// A payout recorded with direction=out is never money for an order; the
+// manual match must refuse it rather than settling on the amount.
+func TestAdminMatchTransactionRefusesOutgoingTransfer(t *testing.T) {
+	f := newAPIFixture(t)
+	h := adminPayments(f)
+	order := f.adminOrder(t, "sepay", 8500)
+	tx, _, err := f.s.InsertPaymentTransaction(f.ctx, nil, store.PaymentTransactionInput{
+		Provider: "sepay", ProviderRef: "out-" + uuid.NewString(), AmountMinor: 8500,
+		Currency: "VND", Direction: "out", Status: domain.TxUnmatched, OccurredAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = f.s.DB.NewRaw("DELETE FROM payment_transactions WHERE id = ?", tx.ID).Exec(context.Background())
+	})
+
+	code, out := f.call(h.MatchTransaction, http.MethodPost, "/api/v1/admin/payments/transactions/"+tx.ID+"/match",
+		`{"order_code":"`+order.Code+`"}`, nil, gin.Param{Key: "id", Value: tx.ID})
+	if code != http.StatusUnprocessableEntity || errCode(out) != "PAYMENT_TRANSACTION_NOT_INCOMING" {
+		t.Fatalf("outgoing match = %d %v, want 422 PAYMENT_TRANSACTION_NOT_INCOMING", code, out)
+	}
+	if got, _ := f.s.GetPaymentOrderByCode(f.ctx, order.Code); got.Status != domain.OrderPending {
+		t.Fatalf("order = %q, want pending", got.Status)
+	}
+}
+
+// waitAudit reads the audit line an async writer eventually stores.
+func waitAudit(t *testing.T, f *apiFixture, entityID, action string) *model.AuditLog {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		row := new(model.AuditLog)
+		err := f.s.DB.NewSelect().Model(row).
+			Where("entity = ?", "payment_order").Where("entity_id = ?", entityID).
+			Where("action = ?", action).Order("created_at DESC").Limit(1).Scan(f.ctx)
+		if err == nil {
+			return row
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("audit line %s/%s was never written", entityID, action)
+	return nil
+}
+
+// An admin API key is a string principal, not a users(id) value. The
+// refund must still be recorded; the FK-bearing actor column stays NULL
+// and the key id moves into the audit payload.
+func TestAdminRefundWithAPIKeyPrincipal(t *testing.T) {
+	f := newAPIFixture(t)
+	h := adminPayments(f)
+	order := f.adminOrder(t, "sepay", 10_000)
+	if code, out := f.call(h.MarkPaid, http.MethodPost, "/api/v1/admin/payments/orders/"+order.Code+"/mark-paid",
+		`{"reason":"bank transfer"}`, nil, gin.Param{Key: "code", Value: order.Code}); code != http.StatusOK {
+		t.Fatalf("mark paid: %d %v", code, out)
+	}
+	principal := "apikey:" + uuid.NewString()
+	code, out := f.callAs(principal, h.RefundOrder, http.MethodPost,
+		"/api/v1/admin/payments/orders/"+order.Code+"/refund",
+		`{"amount_minor":2500,"reason":"customer asked"}`, gin.Param{Key: "code", Value: order.Code})
+	if code != http.StatusOK {
+		t.Fatalf("api-key refund = %d %v, want 200", code, out)
+	}
+	row := refundRow(t, f, order.ID)
+	if row.CreatedBy != "" {
+		t.Fatalf("created_by = %q, want NULL for a non-user principal", row.CreatedBy)
+	}
+	audit := waitAudit(t, f, order.ID, "refunded")
+	if audit.Changes["actor"] != principal {
+		t.Fatalf("audit changes = %v, want actor %q", audit.Changes, principal)
+	}
+}
+
+// The same rule applies to matched_by: an API-key match settles the
+// order and stamps no user id, while the audit line keeps the key id.
+func TestAdminMatchWithAPIKeyPrincipal(t *testing.T) {
+	f := newAPIFixture(t)
+	h := adminPayments(f)
+	order := f.adminOrder(t, "sepay", 12_000)
+	tx := f.unmatchedTransfer(t, "sepay", 12_000, "match-apikey-"+uuid.NewString())
+	principal := "apikey:" + uuid.NewString()
+
+	code, out := f.callAs(principal, h.MatchTransaction, http.MethodPost,
+		"/api/v1/admin/payments/transactions/"+tx.ID+"/match",
+		`{"order_code":"`+order.Code+`"}`, gin.Param{Key: "id", Value: tx.ID})
+	if code != http.StatusOK {
+		t.Fatalf("api-key match = %d %v, want 200", code, out)
+	}
+	if got, _ := f.s.GetPaymentOrderByCode(f.ctx, order.Code); got.Status != domain.OrderPaid {
+		t.Fatalf("order = %q, want paid", got.Status)
+	}
+	reloaded, err := f.s.GetPaymentTransaction(f.ctx, tx.ID)
+	if err != nil || reloaded.Status != domain.TxMatched {
+		t.Fatalf("transaction = %+v, %v", reloaded, err)
+	}
+	if reloaded.MatchedBy != nil {
+		t.Fatalf("matched_by = %v, want NULL for a non-user principal", *reloaded.MatchedBy)
+	}
+	audit := waitAudit(t, f, order.ID, "transaction_matched")
+	if audit.Changes["actor"] != principal {
+		t.Fatalf("audit changes = %v, want actor %q", audit.Changes, principal)
+	}
+}
