@@ -107,8 +107,14 @@ func TestSettleDispatchesSpecEventsOnce(t *testing.T) {
 	if got := nestedString(succeeded, "payment", "reference"); got != "evt-ref-1" {
 		t.Fatalf("payment.succeeded payment.reference = %q", got)
 	}
-	if payment, _ := succeeded["payment"].(map[string]any); payment == nil || payment["amount_minor"] != float64(1190000) {
-		t.Fatalf("payment.succeeded amount = %v, want 1190000", payment["amount_minor"])
+	// Spec §8 names the field "amount" (integer minor units, documented in
+	// T13); the old "amount_minor" spelling must not linger beside it.
+	payment, _ := succeeded["payment"].(map[string]any)
+	if payment == nil || payment["amount"] != float64(1190000) {
+		t.Fatalf("payment.succeeded payment.amount = %v, want 1190000", payment["amount"])
+	}
+	if _, legacy := payment["amount_minor"]; legacy {
+		t.Fatalf("payment.succeeded still carries amount_minor: %v", payment)
 	}
 	if got := nestedString(succeeded, "payment", "currency"); got != "VND" {
 		t.Fatalf("payment.succeeded currency = %q", got)

@@ -403,7 +403,9 @@ func (s *Service) dispatchPaid(ctx context.Context, order *model.PaymentOrder, l
 		"provider": provider,
 		"payment": map[string]any{
 			"provider": provider, "provider_ref": ref,
-			"amount_minor": ev.AmountMinor, "currency": currency,
+			// Spec §8 names the money "amount"; it is integer minor
+			// units, documented in T13.
+			"amount": ev.AmountMinor, "currency": currency,
 			"occurred_at": occurred, "reference": ref,
 		},
 	})
