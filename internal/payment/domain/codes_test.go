@@ -24,8 +24,11 @@ func TestNewOrderCodeFormat(t *testing.T) {
 }
 
 func TestNewOrderCodeEntropy(t *testing.T) {
-	seen := make(map[string]bool, 5000)
-	for i := 0; i < 5000; i++ {
+	// A collision here means the generator repeats inside a single run.
+	// 1,000 draws from 2^30 has a birthday chance of roughly 1 in 2,150;
+	// 5,000 draws would be roughly 1 in 86, which is too flaky to gate CI.
+	seen := make(map[string]bool, 1000)
+	for i := 0; i < 1000; i++ {
 		code := domain.NewOrderCode()
 		if seen[code] {
 			t.Fatalf("duplicate code %q after %d draws", code, i)

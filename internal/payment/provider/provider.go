@@ -31,6 +31,9 @@ type BankAccount struct {
 // CreateAttemptRequest is everything an adapter needs to produce one
 // payment instruction. Money is already resolved by the checkout
 // service; the adapter never computes totals.
+//
+// It is in-process only: the caller maps it into store/domain types, so
+// it carries no JSON tags.
 type CreateAttemptRequest struct {
 	OrderCode   string
 	NumericCode int64
@@ -54,6 +57,9 @@ type CreateAttemptRequest struct {
 
 // CreateAttemptResult is the payment instruction returned to the
 // customer, plus the raw provider payload for debugging.
+//
+// It is in-process only; the store persists its individual columns and
+// Raw, never the struct itself, so it carries no JSON tags.
 type CreateAttemptResult struct {
 	ProviderRef string
 	QRPayload   string
@@ -68,24 +74,36 @@ type CreateAttemptResult struct {
 
 // WebhookEvent is a provider notification normalised into the fields
 // the settlement service matches on.
+//
+// It is in-process only: settlement persists Raw into
+// payment_transactions.raw and never the struct, so it carries no JSON
+// tags.
 type WebhookEvent struct {
 	Provider        string
 	ProviderEventID string
-	ProviderRef     string
-	OrderCode       string
-	NumericCode     int64
-	AmountMinor     int64
-	Currency        string
-	Status          string // domain.OrderPaid or "refunded"/"failed"/"pending"
-	OccurredAt      time.Time
+	// ProviderRef is the provider's own transaction/payment reference,
+	// stored in payment_transactions.provider_ref. Attempt resolution
+	// uses OrderCode/NumericCode and the persisted attempt ref instead;
+	// for SePay those refs differ from this one.
+	ProviderRef string
+	OrderCode   string
+	NumericCode int64
+	AmountMinor int64
+	Currency    string
+	Status      string // domain.OrderPaid or "refunded"/"failed"/"pending"
+	OccurredAt  time.Time
 	// TransferType is "in" (customer paid) or "out" (refund/payout);
 	// SePay sends both to one webhook.
 	TransferType string
 	Raw          json.RawMessage
 }
 
-// Provider is one payment rail. Implementations are stateless apart from
-// configuration already resolved into the request.
+// Provider is one payment rail adapter. The interface carries no ambient
+// state: where a method needs per-call configuration or credentials, the
+// caller resolves them and passes them on the request (CreateAttemptRequest
+// carries Config and Credentials). CancelAttempt and TestConnection take
+// no request, so an adapter that needs a client for them must already
+// hold one, built by whatever constructs the adapter.
 type Provider interface {
 	Name() string
 	CreateAttempt(ctx context.Context, req CreateAttemptRequest) (CreateAttemptResult, error)

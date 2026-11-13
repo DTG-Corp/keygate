@@ -40,3 +40,39 @@ func TestCurrencyExponents(t *testing.T) {
 		}
 	}
 }
+
+func TestComputeTotalsTaxExclusiveHalfUpRound(t *testing.T) {
+	// 1 minor unit at 50% exclusive is the smallest half-up case: 0.5
+	// rounds up to 1, never to 0.
+	got := domain.ComputeTotals(1, 0, 5000, false)
+	if got.NetMinor != 1 || got.TaxMinor != 1 || got.TotalMinor != 2 || got.DiscountMinor != 0 {
+		t.Fatalf("totals = %+v, want net 1 tax 1 total 2 discount 0", got)
+	}
+}
+
+func TestComputeTotalsDiscountClamped(t *testing.T) {
+	// A discount larger than the subtotal cannot make the total negative.
+	got := domain.ComputeTotals(100, 500, 1000, false)
+	if got.NetMinor != 0 || got.TaxMinor != 0 || got.TotalMinor != 0 || got.DiscountMinor != 100 {
+		t.Fatalf("totals = %+v, want total 0 discount clamped to 100", got)
+	}
+	// A negative discount is treated as none.
+	got = domain.ComputeTotals(100, -50, 0, true)
+	if got.NetMinor != 100 || got.TaxMinor != 0 || got.TotalMinor != 100 || got.DiscountMinor != 0 {
+		t.Fatalf("totals = %+v, want total 100 no discount", got)
+	}
+}
+
+func TestComputeTotalsNegativeTaxRateClamped(t *testing.T) {
+	got := domain.ComputeTotals(1000, 0, -500, false)
+	if got.NetMinor != 1000 || got.TaxMinor != 0 || got.TotalMinor != 1000 || got.DiscountMinor != 0 {
+		t.Fatalf("totals = %+v, want no tax", got)
+	}
+}
+
+func TestComputeTotalsEchoesDiscount(t *testing.T) {
+	got := domain.ComputeTotals(1_000_000, 200_000, 1000, false)
+	if got.DiscountMinor != 200_000 {
+		t.Fatalf("DiscountMinor = %d, want 200000", got.DiscountMinor)
+	}
+}

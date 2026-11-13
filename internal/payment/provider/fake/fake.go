@@ -9,8 +9,11 @@ import (
 	"github.com/tabloy/keygate/internal/payment/provider"
 )
 
-// Provider is a scripted adapter for tests. Zero value works: every
-// call succeeds with a synthetic ref.
+// Provider is a scripted adapter for tests. Construct it with New: the
+// zero value would report an empty provider name.
+//
+// Use one per test; the public fields and the Calls/Cancels recordings
+// are not safe for concurrent use.
 type Provider struct {
 	name      string
 	CreateFn  func(context.Context, provider.CreateAttemptRequest) (provider.CreateAttemptResult, error)
