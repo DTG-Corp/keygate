@@ -27,9 +27,9 @@ and for checking exactly what the SPA sent.
    `payment provider config encryption: enabled`.
 2. **Public URL.** `BASE_URL` must be the public HTTPS origin customers
    and providers reach. PayOS probes the webhook URL immediately; plain
-   HTTP will not work. `payment_webhook_base_url` is read when present in
-   settings, but phase 1a's settings API does not expose it, so treat
-   `BASE_URL` as the value in force.
+   HTTP will not work. `payment_webhook_base_url` is writable through the
+   admin settings API and overrides `BASE_URL` there when set; leave it
+   empty to use `BASE_URL`.
 3. **A plan and a price.** A plan with no active `plan_prices` row cannot
    be sold: checkout answers `422 PAYMENT_PRICE_NOT_CONFIGURED`. Enter
    the price **before** publishing the plan (section 4).
@@ -99,10 +99,11 @@ curl -sS -X PUT "$BASE_URL/api/v1/admin/payments/providers" \
   product's id and otherwise the same shape.
 - `api_token` is **required for an enabled row** even if you only use the
   static QR: the reconciler uses it to list bank transactions.
-- `webhook_secret` is required to enable any row. In `hmac` mode it must
-  equal the secret configured on the SePay webhook. In `apikey` mode the
-  adapter verifies `Authorization: Apikey <api_token>` instead, but the
-  row still requires a non-empty `webhook_secret`; store a random value.
+- `webhook_secret` is required to enable a SePay row. In `hmac` mode it
+  must equal the secret configured on the SePay webhook. In `apikey` mode
+  the adapter verifies `Authorization: Apikey <api_token>` instead, but
+  the row still requires a non-empty `webhook_secret`; store a random
+  value.
 - `webhook_auth_mode` is `hmac`, `apikey` or `none`. `none` is test-only:
   a `live` row is refused with `400 PAYMENT_PROVIDER_CONFIG_INVALID`.
 - `ipn_secret` is only for the hosted-gateway IPN (section 1.3). It may
@@ -139,10 +140,11 @@ IPN URL as `{BASE_URL}/api/v1/webhook/sepay-ipn` and set the same secret
 in `credentials.ipn_secret`; the route checks `X-Secret-Key` in constant
 time and acks with `200` and an empty body.
 
-Phase 1a does **not** create hosted-gateway checkouts. The static QR is
-the only SePay instruction the API creates; do not turn on a gateway in
-the expectation that checkout will use it. The IPN receiver is there so
-an externally created gateway order can still settle.
+Phase 1a does **not** create hosted-gateway checkouts; that is deferred
+to phase **1b**. The static QR is the only SePay instruction the API
+creates; Keygate does not redirect buyers to SePay's gateway, and the
+config/settings fields are accepted but unused for create. The IPN
+route is live so an externally created gateway order can still settle.
 
 ### 1.4 Verify and rehearse
 
@@ -188,15 +190,14 @@ curl -sS -X PUT "$BASE_URL/api/v1/admin/payments/providers" \
     "credentials": {
       "api_key": "PAYOS_API_KEY",
       "checksum_key": "PAYOS_CHECKSUM_KEY"
-    },
-    "webhook_secret": "RANDOM_NON_EMPTY_VALUE"
+    }
   }' | jq
 ```
 
 PayOS verifies deliveries with `checksum_key`, not `webhook_secret`. The
-row validation still requires a non-empty `webhook_secret`; store a
-random value and do not reuse the checksum key. `client_id`, `api_key`
-and `checksum_key` are all required for an enabled row.
+`webhook_secret` field is optional and unused for PayOS; omit it (or
+leave it blank on a later save to keep whatever is stored). `client_id`,
+`api_key` and `checksum_key` are all required for an enabled row.
 
 ### 2.2 Register the webhook
 
@@ -290,7 +291,7 @@ curl -sS -X PUT "$BASE_URL/api/v1/admin/plans/$PLAN_ID/prices" \
    section 6 before touching anything.
 
 Order TTL is 24 hours by default (`payment_order_ttl_minutes` read from
-settings, default 1440, not exposed by the phase-1a settings API). PayOS
+settings, default 1440; writable through the admin settings API). PayOS
 orders may expire sooner if PayOS's link expiry is earlier. Expiry is
 swept by the reconciler and the expiry loop; an expired order cannot be
 paid.
@@ -384,6 +385,10 @@ Without the key the webhook routes are not registered at all (404).
 
 ### Webhook returns `401`
 
+The response is `401` with the envelope code
+`PAYMENT_WEBHOOK_UNAUTHORIZED`; the message is deliberately generic.
+Check the matching verification material:
+
 - HMAC: `webhook_secret` must equal the dashboard secret byte-for-byte;
   the timestamp must be within 300 s (fix NTP); the signature is over
   `<timestamp>.<raw body>`, so a proxy that rewrites the body breaks it.
@@ -450,11 +455,11 @@ do not "fix" the NULL by writing a fake user id.
 | No payment outbox | Events are dispatched at settlement; a missed consumer event must be reconciled from the order/status API |
 | Four events only | `order.created`, `order.paid`, `payment.succeeded`, `payment.failed`; no expiry/cancel/refund events |
 | No SePay CIDR allowlist | A valid HMAC/apikey is the only gate; `allowed_cidrs` is not in the config |
-| No SePay hosted-gateway checkout creation | Static QR only; the IPN route can still settle an external gateway order |
+| No SePay hosted-gateway checkout creation | Deferred to phase 1b: static QR only, no redirect to SePay's gateway; the IPN route can still settle an external gateway order |
 | PayOS has no sandbox | Test with a small live payment, or mark a test-mode order paid before enabling the live row |
 | Refunds are manual and do not revoke | Recording a refund is not a licence revocation |
-| `payment_webhook_base_url`, `payment_order_ttl_minutes`, `payment_default_provider` are read but not in the settings allowlist | In practice `BASE_URL` and the 24 h default apply; changing them needs a future release or a direct DB write by an operator who accepts the risk |
-| `PAYMENT_WEBHOOK_UNAUTHORIZED` is documented, not emitted | Webhook failures are bare statuses; monitoring must use HTTP status, not an error code |
+| Consumer GETs share the `payments_api` rate limit | `RATE_LIMIT_API` per minute per IP across create, cancel and both GETs |
+| `payment_return_base_url` is writable but unused | Return/cancel URLs still come from `BASE_URL` in phase 1a |
 
 ## 8. Go-live checklist
 

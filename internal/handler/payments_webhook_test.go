@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -341,6 +342,11 @@ func TestSePayWebhookBadSignatureIs401(t *testing.T) {
 	w := fx.postSePayRaw(body, strconv.FormatInt(time.Now().Unix(), 10), "sha256=deadbeef")
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401: %s", w.Code, w.Body.String())
+	}
+	// The documented 401 carries PAYMENT_WEBHOOK_UNAUTHORIZED; monitoring
+	// branches on the code, not only the status.
+	if got := w.Body.String(); !strings.Contains(got, `"code":"PAYMENT_WEBHOOK_UNAUTHORIZED"`) {
+		t.Fatalf("401 body = %q, want the PAYMENT_WEBHOOK_UNAUTHORIZED code", got)
 	}
 	got, err := fx.s.GetPaymentOrderByCode(fx.ctx, order.Code)
 	if err != nil {

@@ -487,6 +487,50 @@ func TestUpsertValidatesProviderConfigs(t *testing.T) {
 	}
 }
 
+// PayOS verifies deliveries with checksum_key, so an enabled row must
+// not require the unused webhook_secret. SePay's HMAC webhook still
+// does, and an enabled SePay row without one stays invalid.
+func TestPayOSWebhookSecretIsOptional(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	codec, err := providercfg.NewCodec(bytes.Repeat([]byte{0x47}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := providercfg.NewService(s, codec, "live")
+	prod := &model.Product{Name: "PayOS optional", Slug: "payos-optional-" + time.Now().Format("150405.000000"), Type: "desktop"}
+	if err := s.CreateProduct(ctx, prod); err != nil {
+		t.Fatal(err)
+	}
+
+	row, err := svc.Upsert(ctx, providercfg.UpsertInput{
+		Provider: "payos", ProductID: prod.ID, Mode: "live", Enabled: true,
+		Config:      providercfg.PayOSConfig{ClientID: "client"},
+		Credentials: providercfg.PayOSCredentials{APIKey: "key", ChecksumKey: "checksum"},
+	})
+	if err != nil {
+		t.Fatalf("enabled payos without webhook secret: %v", err)
+	}
+	if len(row.WebhookSecretEncrypted) != 0 {
+		t.Fatalf("payos stored a webhook secret it does not use: %d bytes", len(row.WebhookSecretEncrypted))
+	}
+	got, err := svc.Resolve(ctx, prod.ID, "payos", "live")
+	if err != nil {
+		t.Fatalf("resolve payos without webhook secret: %v", err)
+	}
+	if got.WebhookSecret != "" || got.ChecksumKey != "checksum" {
+		t.Fatalf("resolved payos secret/checksum = %q/%q", got.WebhookSecret, got.ChecksumKey)
+	}
+
+	if _, err := svc.Upsert(ctx, providercfg.UpsertInput{
+		Provider: "sepay", ProductID: prod.ID, Mode: "live", Enabled: true,
+		Config:      providercfg.SepayConfig{BankName: "MB Bank", BankCode: "MB", AccountNo: "111"},
+		Credentials: providercfg.SepayCredentials{APIToken: "token"},
+	}); !errors.Is(err, providercfg.ErrProviderConfigInvalid) {
+		t.Fatalf("enabled sepay without webhook secret = %v, want ErrProviderConfigInvalid", err)
+	}
+}
+
 // Precedence: a product override beats the install default; a product
 // with no row of its own falls back to the default; a disabled override
 // is explicit and never falls back. Modes never bleed into each other.

@@ -50,11 +50,13 @@ whatever that consumer requires. They are the only exceptions above.
 The read routes still answer *errors* with the envelope: ask
 `feed.xml` for a product that does not exist and you get `404
 NOT_FOUND` as JSON. So check the status first and decode the route's
-own format only on success. The webhook write routes do not: their
-consumer is the provider, whose retry logic reads the status and (for
-SePay) the ack body. A webhook rejection is a bare `400`, `401`, `403`,
-`413`, `500` or `503` with no JSON code. `GET /pay/:checkout_id` is
-outside `/api/` and is not the envelope either.
+own format only on success. The webhook write routes mostly do not:
+their consumer is the provider, whose retry logic reads the status and
+(for SePay) the ack body. A signature or key failure is the one
+enveloped webhook error — `401 PAYMENT_WEBHOOK_UNAUTHORIZED`; every
+other rejection is a bare `400`, `403`, `413`, `500` or `503` with no
+JSON code. `GET /pay/:checkout_id` is outside `/api/` and is not the
+envelope either.
 
 ## Naming and types
 
@@ -182,10 +184,9 @@ checkout.
 
 Every route needs an API key. `payments:write` reaches create and
 cancel; `payments:read` (or `payments:write`) reaches the two GETs.
-Create and cancel share the `payments_api` rate-limit scope (per IP,
-`RATE_LIMIT_API` per minute); the two GETs carry auth and scope but no
-rate-limit middleware of their own. A key bound to one product sees only
-that product's orders.
+All four consumer routes share the `payments_api` rate-limit scope —
+`RATE_LIMIT_API` per minute per IP; a throttled call is `429`. A key
+bound to one product sees only that product's orders.
 
 | Method | Path | Scope |
 |---|---|---|
@@ -370,8 +371,9 @@ that handler. It is outside `/api/` and is not the envelope.
 
 The three webhook routes read the raw bytes themselves: a signature
 covers the provider's bytes, not a re-marshalled struct. They never use
-the JSON envelope, never use the consumer/admin auth middleware, and
-answer a bare status on failure. Each route has its own rate-limit
+the consumer/admin auth middleware. A signature or key failure is
+`401 PAYMENT_WEBHOOK_UNAUTHORIZED` in the standard envelope; every
+other failure is a bare status. Each route has its own rate-limit
 scope at 120 requests/minute per IP and caps the body at 256 KiB
 (`413` when over).
 
@@ -403,13 +405,14 @@ drift as shipped**), but the IPN endpoint, `ipn_secret` and settlement
 path exist for a gateway order created elsewhere.
 
 PayOS signs `data` with the config's `checksum_key`; the route verifies
-it before any database write. A missing or wrong signature is `401`.
+it before any database write. A missing or wrong signature is `401
+PAYMENT_WEBHOOK_UNAUTHORIZED`.
 
-Common answers, all bare (no JSON error code):
+Common answers (only the 401 is enveloped):
 
 | Status | When |
 |---|---|
-| `401` | signature/key missing, wrong or stale (`PAYMENT_WEBHOOK_UNAUTHORIZED` in the docs; no envelope is written) |
+| `401` | signature/key missing, wrong or stale — envelope code `PAYMENT_WEBHOOK_UNAUTHORIZED` |
 | `400` | the body is not JSON, or an event has no usable id |
 | `403` | the account that verified the delivery is not the order's product's |
 | `413` | body over 256 KiB |
@@ -549,9 +552,10 @@ Provider configuration:
   `account_name`, `webhook_auth_mode` (`hmac|apikey|none`). SePay
   `credentials`: `api_token`, `ipn_secret`.
 - PayOS `config`: `client_id`. PayOS `credentials`: `api_key`,
-  `checksum_key`. PayOS signs webhooks with `checksum_key`; the stored
-  webhook secret is required to enable a row but is not used by the
-  PayOS adapter.
+  `checksum_key`. PayOS signs webhooks with `checksum_key`; the
+  `webhook_secret` field is accepted but may be empty and is not used
+  by the PayOS adapter. SePay's `webhook_secret` is required to enable
+  a row.
 - `DELETE /admin/payments/providers/:id/secrets` body
   `{"fields": ["credentials"|"webhook_secret"]}`; `204` on success.
   `:id` is the config row id, not the provider name.
@@ -605,7 +609,7 @@ envelope codes (`BAD_REQUEST` 400, `NOT_FOUND` 404, `INTERNAL_ERROR`
 | `PAYMENT_PROVIDER_UNKNOWN` | 400 |
 | `PAYMENT_PROVIDER_CONFIG_INVALID` | 400 |
 | `PAYMENT_WEBHOOK_URL_UNSET` | 400 |
-| `PAYMENT_WEBHOOK_UNAUTHORIZED` | 401 — documented, not enveloped; the webhook routes answer a bare 401 |
+| `PAYMENT_WEBHOOK_UNAUTHORIZED` | 401 — signature/key failure on a webhook route (enveloped) |
 | `PAYMENT_ORDER_NOT_FOUND` | 404 |
 | `PAYMENT_PROVIDER_NOT_FOUND` | 404 |
 | `PAYMENT_TRANSACTION_NOT_FOUND` | 404 |
@@ -657,21 +661,25 @@ and this contract are the source of truth.
   a later phase.
 - **SePay CIDR allowlist deferred.** There is no source-IP check in
   phase 1a; HMAC/apikey (and PayOS's checksum) is the gate. The
-  `payment_webhook_base_url` and `payment_order_ttl_minutes` settings
-  are read when present but are not in the admin settings allowlist in
-  phase 1a, so in practice `BASE_URL` and the 24-hour default apply.
+  `payment_default_provider`, `payment_order_ttl_minutes`,
+  `payment_return_base_url` and `payment_webhook_base_url` settings are
+  writable through the admin settings API. `payment_return_base_url` is
+  accepted but not yet read by a create path (PayOS return/cancel URLs
+  come from `BASE_URL`).
 - **PayOS confirm-webhook is explicit, and PayOS has no sandbox.** The
   admin action registers the URL only after the install is public
   HTTPS; PayOS probes immediately. Test with a real small payment, or
   mark a `test`-mode order paid manually. The optional spec §5.2 buyer
   fields `company_name` and `request_invoice` are not accepted; only
   `name`, `email`, `phone`, `tax_id`, `address` are.
-- **SePay hosted-gateway checkout creation is not implemented.** The
-  IPN route, `ipn_secret` verification and settlement exist, and
-  `GatewayCanonical`/`SignGateway` are tested helpers, but
-  `CreateAttempt` always returns the static VietQR. A hosted gateway
-  order created outside Keygate can still deliver its IPN to
-  `/api/v1/webhook/sepay-ipn`.
+- **SePay hosted-gateway checkout creation is deferred to phase 1b.**
+  Phase 1a creates only the static VietQR: `CreateAttempt` has no
+  `RedirectURL`/`FormHTML` path, and Keygate never redirects a buyer to
+  SePay's gateway. The IPN route, `X-Secret-Key` verification and
+  settlement are live, so an existing external gateway integration can
+  still notify `/api/v1/webhook/sepay-ipn`. The `ipn_secret` credential
+  and the `payment_return_base_url` setting are accepted but are not
+  used to create a gateway checkout.
 - **Admin actor attribution is NULL for API-key admins.**
   `payment_refunds.created_by` and `payment_transactions.matched_by`
   reference `users(id)`, so an `apikey:<id>` principal is stored as
@@ -691,10 +699,6 @@ and this contract are the source of truth.
 - **Idempotency mismatch is 422, not 409.** `IDEMPOTENCY_KEY_CONFLICT`
   is the existing middleware answer; the plan's "409" is stale. The
   header itself is optional on create.
-- **`PAYMENT_WEBHOOK_UNAUTHORIZED` is documented but never written.**
-  Webhook auth failures are a bare `401` with no envelope; the code is
-  retained in the vocabulary for clients and for a future route that
-  can answer JSON.
 
 ## Retrying
 

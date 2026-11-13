@@ -40,12 +40,9 @@ var paymentSourceFiles = []string{
 // paymentCode pins one documented code to its one status.
 //
 // emitted is false for a code the contract documents but no handler
-// writes. PAYMENT_WEBHOOK_UNAUTHORIZED is that case in phase 1a: all
-// three webhook routes answer a bare 401 with no envelope, because the
-// provider, not an SDK, reads that response (see
-// TestPaymentWebhookAuthIsBare401). The entry keeps the documented
-// status pinned, and fails this test if a handler starts emitting the
-// code without the docs being updated.
+// writes. Every code in phase 1a is emitted; the flag stays so a code
+// documented ahead of its handler can be pinned without failing the
+// scan in the other direction.
 type paymentCode struct {
 	status  int
 	emitted bool
@@ -92,9 +89,9 @@ var paymentVocabulary = map[string]paymentCode{
 	"PAYMENT_PROVIDER_ERROR":    {status: 502, emitted: true},
 	"PAYMENT_PROVIDER_DISABLED": {status: 503, emitted: true},
 
-	// Documented, not emitted: the raw-body webhook routes answer 401
-	// without a JSON error envelope. See the paymentCode comment.
-	"PAYMENT_WEBHOOK_UNAUTHORIZED": {status: 401, emitted: false},
+	// The webhook routes answer 401 with this code and a bare 400 for a
+	// body the adapter cannot decode. See TestPaymentWebhookAuthWritesCode.
+	"PAYMENT_WEBHOOK_UNAUTHORIZED": {status: 401, emitted: true},
 }
 
 // httpStatusCode resolves the http.Status* selectors the handlers use.
@@ -138,7 +135,7 @@ type errorSite struct {
 }
 
 func TestPaymentErrorVocabulary(t *testing.T) {
-	sites, files := scanPaymentErrorSites(t)
+	sites, _ := scanPaymentErrorSites(t)
 
 	// An emitted code must be in the vocabulary with exactly the status
 	// it is written with, and a vocabulary entry marked emitted must be
@@ -206,26 +203,22 @@ func TestPaymentErrorVocabulary(t *testing.T) {
 			t.Errorf("%s is a payment handler file not listed in paymentSourceFiles", name)
 		}
 	}
-
-	if files["payments_webhook.go"] != 0 {
-		t.Errorf("payments_webhook.go writes %d enveloped error(s); the raw-body webhook routes answer a bare status, not the envelope", files["payments_webhook.go"])
-	}
 }
 
-// TestPaymentWebhookAuthIsBare401 pins why PAYMENT_WEBHOOK_UNAUTHORIZED is
-// documented but not emitted: a provider reads the webhook response, not
-// an SDK, so an authentication failure is a bare 401 (no JSON code) and a
-// body the adapter cannot parse is a 400. The webhook package's adapters
-// prove the signature check itself; this test proves the route maps its
-// failure to the status providers retry on.
-func TestPaymentWebhookAuthIsBare401(t *testing.T) {
+// TestPaymentWebhookAuthWritesCode pins the webhook failure mapping: an
+// authentication failure is 401 with PAYMENT_WEBHOOK_UNAUTHORIZED (the
+// code monitoring branches on), a body the adapter cannot parse stays a
+// bare 400, and the success ack is untouched. The webhook package's
+// adapters prove the signature check itself; this test proves the route
+// maps its failures to the answer providers retry on.
+func TestPaymentWebhookAuthWritesCode(t *testing.T) {
 	src, err := os.ReadFile("payments_webhook.go")
 	if err != nil {
 		t.Fatalf("read payments_webhook.go: %v", err)
 	}
 	body := string(src)
 	for _, want := range []string{
-		"c.Status(http.StatusUnauthorized)",
+		`response.Err(c, http.StatusUnauthorized, "PAYMENT_WEBHOOK_UNAUTHORIZED", "webhook signature verification failed")`,
 		"c.Status(http.StatusBadRequest)",
 		`gin.H{"success": true}`,
 	} {
@@ -237,7 +230,7 @@ func TestPaymentWebhookAuthIsBare401(t *testing.T) {
 
 // scanPaymentErrorSites parses every payment handler file and returns
 // the (code, status) call sites plus, per file, how many enveloped
-// errors it writes. The webhook file must be zero.
+// errors it writes.
 func scanPaymentErrorSites(t *testing.T) ([]errorSite, map[string]int) {
 	t.Helper()
 	fset := token.NewFileSet()

@@ -18,6 +18,7 @@ import (
 	"github.com/tabloy/keygate/internal/payment/providers/sepay"
 	"github.com/tabloy/keygate/internal/payment/settlement"
 	"github.com/tabloy/keygate/internal/store"
+	"github.com/tabloy/keygate/pkg/response"
 )
 
 // maxWebhookBody bounds one provider delivery at the spec's 256 KiB.
@@ -272,12 +273,15 @@ func scopedEventID(cfg *providercfg.ResolvedConfig, ev provider.WebhookEvent) st
 }
 
 // parseStatus maps an adapter error to the answer the provider gets. An
-// authentication failure is 401; a body the adapter cannot decode is the
-// sender's mistake (400), not a retryable fault.
+// authentication failure is 401 with the documented
+// PAYMENT_WEBHOOK_UNAUTHORIZED code; a body the adapter cannot decode is
+// the sender's mistake (400), not a retryable fault, and stays a bare
+// status. The success acks are written by ackJSON/ackEmpty and are not
+// touched here.
 func (h *PaymentsWebhookHandler) parseStatus(c *gin.Context, providerName string, err error) {
 	h.logger().Warn("webhook: provider payload rejected", "provider", providerName, "error", err)
 	if errors.Is(err, sepay.ErrWebhookUnauthorized) || errors.Is(err, payos.ErrWebhookUnauthorized) {
-		c.Status(http.StatusUnauthorized)
+		response.Err(c, http.StatusUnauthorized, "PAYMENT_WEBHOOK_UNAUTHORIZED", "webhook signature verification failed")
 		return
 	}
 	c.Status(http.StatusBadRequest)

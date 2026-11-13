@@ -258,7 +258,9 @@ tags:
   - name: Payment Webhooks
     description: |
       Raw-body deliveries from SePay and PayOS. A provider, not an SDK,
-      reads these responses: they use bare statuses, not the envelope.
+      reads these responses. A signature/key failure is
+      `401 PAYMENT_WEBHOOK_UNAUTHORIZED` in the standard envelope; other
+      failures are bare statuses.
   - name: Payments Admin
     description: |
       Payment ledger, reconciliation queue and provider configuration.
@@ -5811,10 +5813,11 @@ paths:
 
         Success is exactly `200` and `{"success": true}`; SePay retries a
         delivery it does not see acked with that exact body for roughly
-        half an hour. `401` (bad signature/key), `400` (unparseable body),
-        `403` (account is not the order's product's), `413`, `500`
-        (transient settlement failure; retry) and `503` (no usable
-        config) are bare statuses with no error code. Duplicates,
+        half an hour. `401` (bad signature/key) is the standard error
+        envelope with code `PAYMENT_WEBHOOK_UNAUTHORIZED`; `400`
+        (unparseable body), `403` (account is not the order's product's),
+        `413`, `500` (transient settlement failure; retry) and `503` (no
+        usable config) are bare statuses with no error code. Duplicates,
         unknown order codes and outgoing transfers are acked and never
         grant a licence. There is no source-IP allowlist in phase 1a.
       operationId: sepayBankWebhook
@@ -5847,7 +5850,7 @@ paths:
         "400":
           description: Body is not JSON
         "401":
-          description: Missing, wrong or stale signature/key (bare, no envelope)
+          description: "Missing, wrong or stale signature/key: `PAYMENT_WEBHOOK_UNAUTHORIZED` (enveloped)"
         "403":
           description: The verified account does not belong to the order's product
         "413":
@@ -5870,9 +5873,11 @@ paths:
         settles; `TRANSACTION_VOID` emits `payment.failed`; other statuses
         change no licence. Success is `200` with an empty body.
 
-        Phase 1a does not create hosted-gateway checkouts, but this route
-        settles an order created outside Keygate. Failures mirror the bank
-        webhook: bare `401`, `400`, `403`, `413`, `500`, `503`.
+        Phase 1a does not create hosted-gateway checkouts (deferred to
+        phase 1b), but this route settles an order created outside
+        Keygate; Keygate never redirects a buyer to SePay's gateway.
+        Failures mirror the bank webhook: `401 PAYMENT_WEBHOOK_UNAUTHORIZED`
+        (enveloped), and bare `400`, `403`, `413`, `500`, `503`.
       operationId: sepayGatewayIPN
       security: []
       parameters:
@@ -5891,7 +5896,7 @@ paths:
         "400":
           description: Body is not JSON
         "401":
-          description: Missing or wrong `X-Secret-Key` (bare, no envelope)
+          description: "Missing or wrong `X-Secret-Key`: `PAYMENT_WEBHOOK_UNAUTHORIZED` (enveloped)"
         "403":
           description: The verified account does not belong to the order's product
         "413":
@@ -5912,12 +5917,13 @@ paths:
         `signature` field is verified with the config's `checksum_key`
         before any write. Any `2xx` marks the delivery delivered; this
         server answers `200` with `{"success": true}`. A missing or wrong
-        signature is a bare `401`. There is no PayOS sandbox.
+        signature is `401 PAYMENT_WEBHOOK_UNAUTHORIZED` (enveloped).
+        There is no PayOS sandbox.
 
         Duplicate deliveries, unknown orders and non-paid statuses are
         acked; only `code=00`, `success=true` and `data.code=00` settle.
-        `UNDERPAID` is recorded as pending for an operator. Failures
-        mirror the other webhooks: bare `400`, `401`, `403`, `413`, `500`,
+        `UNDERPAID` is recorded as pending for an operator. Other failures
+        mirror the other webhooks: bare `400`, `403`, `413`, `500`,
         `503`. PayOS's retry policy is undocumented, so the reconciliation
         worker is the backstop.
       operationId: payosWebhook
@@ -5939,7 +5945,7 @@ paths:
         "400":
           description: Body is not JSON
         "401":
-          description: Missing or invalid signature (bare, no envelope)
+          description: "Missing or invalid signature: `PAYMENT_WEBHOOK_UNAUTHORIZED` (enveloped)"
         "403":
           description: The verified account does not belong to the order's product
         "413":

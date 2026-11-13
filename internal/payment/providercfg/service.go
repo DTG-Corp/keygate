@@ -219,7 +219,11 @@ func (s *Service) Upsert(ctx context.Context, in UpsertInput) (*model.PaymentPro
 
 	hasSecret := in.WebhookSecret != "" || (existing != nil && len(existing.WebhookSecretEncrypted) > 0)
 	if in.Enabled {
-		if !hasSecret {
+		// PayOS authenticates its webhook with checksum_key, not the
+		// webhook secret, so requiring one would force operators to
+		// store a meaningless value. SePay still needs its secret for
+		// HMAC mode.
+		if requiresWebhookSecret(provider) && !hasSecret {
 			return nil, fmt.Errorf("%w: webhook secret is required for an enabled provider", ErrProviderConfigInvalid)
 		}
 		if credsJSON == nil && (existing == nil || len(existing.CredentialsEncrypted) == 0) {
@@ -285,16 +289,19 @@ func (s *Service) Resolve(ctx context.Context, productID, provider, mode string)
 	if len(row.CredentialsEncrypted) == 0 {
 		return nil, fmt.Errorf("%w: enabled provider has no stored credentials", ErrProviderConfigInvalid)
 	}
-	if len(row.WebhookSecretEncrypted) == 0 {
+	if requiresWebhookSecret(row.Provider) && len(row.WebhookSecretEncrypted) == 0 {
 		return nil, fmt.Errorf("%w: enabled provider has no stored webhook secret", ErrProviderConfigInvalid)
 	}
 	creds, err := s.codec.Open(row.ID, fieldCredentials, row.CredentialsEncrypted)
 	if err != nil {
 		return nil, fmt.Errorf("%w: stored credentials cannot be decrypted", ErrProviderConfigInvalid)
 	}
-	secret, err := s.codec.Open(row.ID, fieldWebhookSecret, row.WebhookSecretEncrypted)
-	if err != nil {
-		return nil, fmt.Errorf("%w: stored webhook secret cannot be decrypted", ErrProviderConfigInvalid)
+	var secret []byte
+	if len(row.WebhookSecretEncrypted) > 0 {
+		secret, err = s.codec.Open(row.ID, fieldWebhookSecret, row.WebhookSecretEncrypted)
+		if err != nil {
+			return nil, fmt.Errorf("%w: stored webhook secret cannot be decrypted", ErrProviderConfigInvalid)
+		}
 	}
 	if err := validateConfig(row.Provider, row.Config, true, row.Mode); err != nil {
 		return nil, err
@@ -411,6 +418,14 @@ func normalizeProvider(raw string) (string, error) {
 	default:
 		return "", fmt.Errorf("%w: %q", ErrProviderUnknown, provider)
 	}
+}
+
+// requiresWebhookSecret reports whether a provider's webhook is verified
+// with the row's webhook_secret. SePay's HMAC mode uses it; PayOS signs
+// deliveries with checksum_key and never reads this field, so an enabled
+// PayOS row may legitimately have none.
+func requiresWebhookSecret(provider string) bool {
+	return provider == "sepay"
 }
 
 // marshalProviderObject serialises one admin-supplied blob and

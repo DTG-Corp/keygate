@@ -1048,7 +1048,8 @@ func main() {
 		middleware.RateLimitByIPScoped("payments_api", cfg.RateLimitAPI, time.Minute))
 	payRead := v1.Group("/payments",
 		middleware.APIKeyAuth(db),
-		middleware.RequireScope(model.ScopePaymentsRead, model.ScopePaymentsWrite))
+		middleware.RequireScope(model.ScopePaymentsRead, model.ScopePaymentsWrite),
+		middleware.RateLimitByIPScoped("payments_api", cfg.RateLimitAPI, time.Minute))
 	{
 		payWrite.POST("/orders", middleware.Idempotency(db), paymentsAPIH.Create)
 		payWrite.POST("/orders/:code/cancel", paymentsAPIH.Cancel)
