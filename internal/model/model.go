@@ -172,9 +172,11 @@ type Product struct {
 
 	// TaxRateBP is the VAT rate in basis points (1000 = 10%) used when
 	// a VN payment order is priced. PriceIncludesTax says whether the
-	// plan's listed price already contains that tax.
-	TaxRateBP        int  `bun:",notnull" json:"tax_rate_bp"`
-	PriceIncludesTax bool `bun:",notnull" json:"price_includes_tax"`
+	// plan's listed price already contains that tax; nil means "not
+	// set" and lets the database default (true) apply, so a caller that
+	// omits the field does not silently write false.
+	TaxRateBP        int   `bun:",notnull" json:"tax_rate_bp"`
+	PriceIncludesTax *bool `bun:",nullzero" json:"price_includes_tax,omitempty"`
 
 	CreatedAt time.Time `bun:",nullzero,default:now()" json:"created_at"`
 }

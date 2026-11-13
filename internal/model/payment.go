@@ -18,7 +18,7 @@ type PlanPrice struct {
 	Provider         string    `bun:",notnull" json:"provider"`
 	Currency         string    `bun:",notnull" json:"currency"`
 	AmountMinor      int64     `bun:",notnull" json:"amount_minor"`
-	CurrencyExponent int16     `bun:",notnull,default:2" json:"currency_exponent"`
+	CurrencyExponent int16     `bun:",notnull" json:"currency_exponent"`
 	BillingInterval  string    `bun:",notnull,default:''" json:"billing_interval"`
 	ExternalPriceID  string    `bun:",notnull,default:''" json:"external_price_id"`
 	Active           bool      `bun:",notnull,default:true" json:"active"`
@@ -38,10 +38,10 @@ type PaymentProviderConfig struct {
 	Provider               string          `bun:",notnull" json:"provider"`
 	ProductID              string          `bun:",nullzero" json:"product_id,omitempty"`
 	Mode                   string          `bun:",notnull" json:"mode"`
-	Enabled                bool            `bun:",notnull,default:true" json:"enabled"`
+	Enabled                bool            `bun:",notnull" json:"enabled"`
 	Config                 json.RawMessage `bun:",notnull,type:jsonb" json:"config"`
-	CredentialsEncrypted   []byte          `bun:",notnull" json:"-"`
-	WebhookSecretEncrypted []byte          `bun:",notnull" json:"-"`
+	CredentialsEncrypted   []byte          `bun:",notnull,nullzero" json:"-"`
+	WebhookSecretEncrypted []byte          `bun:",notnull,nullzero" json:"-"`
 	CreatedAt              time.Time       `bun:",nullzero,default:now()" json:"created_at"`
 	UpdatedAt              time.Time       `bun:",nullzero,default:now()" json:"updated_at"`
 }
@@ -124,37 +124,40 @@ type PaymentAttempt struct {
 
 // PaymentTransaction is a transfer seen at a provider, matched to an
 // order or left for the unmatched queue. (Provider, ProviderRef) is the
-// dedupe key, so redelivery of the same bank transfer is a no-op.
+// dedupe key, so redelivery of the same bank transfer is a no-op. Raw is
+// json.RawMessage, not []byte, so the payload is stored as JSON rather
+// than base64.
 type PaymentTransaction struct {
 	bun.BaseModel `bun:"table:payment_transactions"`
 
-	ID           string    `bun:",pk" json:"id"`
-	Provider     string    `bun:",notnull" json:"provider"`
-	ProviderRef  string    `bun:",notnull" json:"provider_ref"`
-	OrderID      *string   `bun:",nullzero" json:"order_id,omitempty"`
-	AmountMinor  int64     `bun:",notnull" json:"amount_minor"`
-	Currency     string    `bun:",notnull" json:"currency"`
-	Status       string    `bun:",notnull" json:"status"`
-	IgnoreReason string    `bun:",notnull,default:''" json:"ignore_reason"`
-	Raw          []byte    `bun:",notnull,type:jsonb" json:"raw"`
-	OccurredAt   time.Time `bun:",notnull" json:"occurred_at"`
-	CreatedAt    time.Time `bun:",nullzero,default:now()" json:"created_at"`
+	ID           string          `bun:",pk" json:"id"`
+	Provider     string          `bun:",notnull" json:"provider"`
+	ProviderRef  string          `bun:",notnull" json:"provider_ref"`
+	OrderID      *string         `bun:",nullzero" json:"order_id,omitempty"`
+	AmountMinor  int64           `bun:",notnull" json:"amount_minor"`
+	Currency     string          `bun:",notnull" json:"currency"`
+	Status       string          `bun:",notnull" json:"status"`
+	IgnoreReason string          `bun:",notnull,default:''" json:"ignore_reason"`
+	Raw          json.RawMessage `bun:",notnull,type:jsonb" json:"raw"`
+	OccurredAt   time.Time       `bun:",notnull" json:"occurred_at"`
+	CreatedAt    time.Time       `bun:",nullzero,default:now()" json:"created_at"`
 }
 
 // PaymentEvent is the raw provider payload behind a state change, kept
 // once per (Provider, EventID). processed_events remains the claim/done
-// idempotency mechanism; this is the audit trail.
+// idempotency mechanism; this is the audit trail. Raw is json.RawMessage
+// so the payload is stored as JSON rather than base64.
 type PaymentEvent struct {
 	bun.BaseModel `bun:"table:payment_events"`
 
-	ID         string    `bun:",pk" json:"id"`
-	Provider   string    `bun:",notnull" json:"provider"`
-	EventID    string    `bun:",notnull" json:"event_id"`
-	OrderID    string    `bun:",nullzero" json:"order_id,omitempty"`
-	Kind       string    `bun:",notnull" json:"kind"`
-	Raw        []byte    `bun:",notnull,type:jsonb" json:"raw"`
-	OccurredAt time.Time `json:"occurred_at"`
-	CreatedAt  time.Time `bun:",nullzero,default:now()" json:"created_at"`
+	ID         string          `bun:",pk" json:"id"`
+	Provider   string          `bun:",notnull" json:"provider"`
+	EventID    string          `bun:",notnull" json:"event_id"`
+	OrderID    string          `bun:",nullzero" json:"order_id,omitempty"`
+	Kind       string          `bun:",notnull" json:"kind"`
+	Raw        json.RawMessage `bun:",notnull,type:jsonb" json:"raw"`
+	OccurredAt time.Time       `json:"occurred_at"`
+	CreatedAt  time.Time       `bun:",nullzero,default:now()" json:"created_at"`
 }
 
 // PaymentRefund records money returned against an order. Method says how
@@ -224,8 +227,9 @@ type CouponScope struct {
 	ScopeID   string `bun:",pk" json:"scope_id"`
 }
 
-// CouponRedemption is one order that used a coupon, kept after the order
-// for per-customer limit checks even if the order is later deleted.
+// CouponRedemption is one order that used a coupon. The FK is ON DELETE
+// CASCADE: a redemption row is removed with its order, so per-customer
+// counts only cover orders that still exist.
 type CouponRedemption struct {
 	bun.BaseModel `bun:"table:coupon_redemptions"`
 
