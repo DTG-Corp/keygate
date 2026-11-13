@@ -35,10 +35,11 @@ const (
 	payosChecksumKey   = "payos-checksum-key"
 )
 
-// webhookFixture is an API fixture with one live SePay row (product A
-// and install default), one live PayOS row for product A, a settlement
-// service, and a webhook subscription for product A that records the
-// two paid events as delivery rows.
+// webhookFixture is an API fixture with live SePay rows, a live PayOS
+// row, a settlement service, and a webhook subscription for product A
+// that records the two paid events as delivery rows. The two-account
+// variant holds a row for product A and the install default; the
+// default-only variant holds the install-wide rows alone.
 type webhookFixture struct {
 	*apiFixture
 	handler   *PaymentsWebhookHandler
@@ -48,6 +49,19 @@ type webhookFixture struct {
 }
 
 func newSepayWebhookFixture(t *testing.T) *webhookFixture {
+	t.Helper()
+	return newWebhookFixture(t, true)
+}
+
+// newDefaultOnlyWebhookFixture is a single-account install: the
+// install-wide (product_id NULL) SePay and PayOS rows exist and no
+// product has a row of its own, so every order resolves to the default.
+func newDefaultOnlyWebhookFixture(t *testing.T) *webhookFixture {
+	t.Helper()
+	return newWebhookFixture(t, false)
+}
+
+func newWebhookFixture(t *testing.T, perProduct bool) *webhookFixture {
 	t.Helper()
 	f := newAPIFixture(t)
 	codec, err := providercfg.NewCodec(bytes.Repeat([]byte{0x31}, 32))
@@ -64,7 +78,13 @@ func newSepayWebhookFixture(t *testing.T) *webhookFixture {
 	sepayCreds := providercfg.SepayCredentials{APIToken: "token", IPNSecret: sepayIPNSecret}
 	// The product row proves the peeked order code selects the override;
 	// the install-wide row is what verifies a transfer naming no order.
-	for _, productID := range []string{f.prodA.ID, ""} {
+	sepayProductIDs := []string{""}
+	payosProductID := ""
+	if perProduct {
+		sepayProductIDs = append(sepayProductIDs, f.prodA.ID)
+		payosProductID = f.prodA.ID
+	}
+	for _, productID := range sepayProductIDs {
 		if _, err := cfgSvc.Upsert(f.ctx, providercfg.UpsertInput{
 			Provider: "sepay", ProductID: productID, Mode: "live", Enabled: true,
 			Config: sepayCfg, Credentials: sepayCreds, WebhookSecret: sepayWebhookSecret,
@@ -73,7 +93,7 @@ func newSepayWebhookFixture(t *testing.T) *webhookFixture {
 		}
 	}
 	if _, err := cfgSvc.Upsert(f.ctx, providercfg.UpsertInput{
-		Provider: "payos", ProductID: f.prodA.ID, Mode: "live", Enabled: true,
+		Provider: "payos", ProductID: payosProductID, Mode: "live", Enabled: true,
 		Config:        providercfg.PayOSConfig{ClientID: "client"},
 		Credentials:   providercfg.PayOSCredentials{APIKey: "api-key", ChecksumKey: payosChecksumKey},
 		WebhookSecret: "payos-webhook-secret",
@@ -725,6 +745,90 @@ func TestSePayWebhookVerifiedOrderMustMatchVerifyingAccount(t *testing.T) {
 	})
 }
 
+// payosWebhookBody is one signed PayOS delivery naming the order, and
+// postPayOS hands it to the handler the way the router would.
+func payosWebhookBody(t *testing.T, order *model.PaymentOrder, reference string) []byte {
+	t.Helper()
+	data := map[string]any{
+		"orderCode": order.NumericCode, "amount": int64(1190000),
+		"description": order.Code, "currency": "VND",
+		"paymentLinkId": "plink-" + reference, "code": "00",
+		"transactionDateTime": "2026-11-12 15:04:05", "reference": reference,
+	}
+	body, err := json.Marshal(map[string]any{
+		"code": "00", "desc": "success", "success": true, "data": data,
+		"signature": payos.SignWebhook(payosChecksumKey, data),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func postPayOS(fx *webhookFixture, body []byte) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/webhook/payos", bytes.NewReader(body))
+	fx.handler.HandlePayOS(c)
+	w.Code = c.Writer.Status()
+	return w
+}
+
+// A default-only SePay install holds one install-wide row and no
+// per-product rows. Resolve falls back to that row for every product, so
+// its nil error does not mean the order's product has an account of its
+// own; a genuine delivery must pass binding and settle.
+func TestSePayWebhookDefaultOnlyInstallSettles(t *testing.T) {
+	fx := newDefaultOnlyWebhookFixture(t)
+	order := fx.newOrder(t, "new", "sepay")
+	eventID := newSePayEventID()
+
+	w := fx.postSePay(t, sepayBankBody(order.Code, eventID, "in"), fx.secret)
+	if w.Code != http.StatusOK {
+		t.Fatalf("default-only delivery = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	got, err := fx.s.GetPaymentOrderByCode(fx.ctx, order.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.OrderPaid {
+		t.Fatalf("order status = %q, want paid", got.Status)
+	}
+	if n := fx.count(t, "SELECT count(*) FROM licenses WHERE email = ?", order.Email); n != 1 {
+		t.Fatalf("licences = %d, want 1", n)
+	}
+	// The install default keeps the provider's bare event id.
+	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'sepay' AND event_id = ?", eventIDFor("", eventID)); n != 1 {
+		t.Fatalf("payment_events rows = %d, want 1", n)
+	}
+}
+
+// The same default-only install for PayOS: the checksum key of the
+// install-wide row verifies a delivery for a product with no row.
+func TestPayOSWebhookDefaultOnlyInstallSettles(t *testing.T) {
+	fx := newDefaultOnlyWebhookFixture(t)
+	order := fx.newOrder(t, "new", "payos")
+	reference := "FT-" + uuid.NewString()[:8]
+
+	w := postPayOS(fx, payosWebhookBody(t, order, reference))
+	if w.Code != http.StatusOK {
+		t.Fatalf("default-only delivery = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	got, err := fx.s.GetPaymentOrderByCode(fx.ctx, order.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.OrderPaid {
+		t.Fatalf("order status = %q, want paid", got.Status)
+	}
+	if n := fx.count(t, "SELECT count(*) FROM licenses WHERE email = ?", order.Email); n != 1 {
+		t.Fatalf("licences = %d, want 1", n)
+	}
+	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'payos' AND event_id = ?", reference); n != 1 {
+		t.Fatalf("payment_events rows = %d, want 1", n)
+	}
+}
+
 // Two per-product SePay accounts can see the same bank transfer id. The
 // event key is scoped to the account, so the second account's genuine
 // delivery is not mistaken for a duplicate of the first and both orders
@@ -821,34 +925,13 @@ func TestPayOSWebhookVerifiesChecksumAndSettles(t *testing.T) {
 		t.Fatal("order has no numeric code")
 	}
 	reference := "FT-" + uuid.NewString()[:8]
-	data := map[string]any{
-		"orderCode": order.NumericCode, "amount": int64(1190000),
-		"description": order.Code, "currency": "VND",
-		"paymentLinkId": "plink-" + reference, "code": "00",
-		"transactionDateTime": "2026-11-12 15:04:05", "reference": reference,
-	}
-	body, err := json.Marshal(map[string]any{
-		"code": "00", "desc": "success", "success": true, "data": data,
-		"signature": payos.SignWebhook(payosChecksumKey, data),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	body := payosWebhookBody(t, order, reference)
 
-	post := func(payload []byte) *httptest.ResponseRecorder {
-		w := httptest.NewRecorder()
-		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/webhook/payos", bytes.NewReader(payload))
-		fx.handler.HandlePayOS(c)
-		w.Code = c.Writer.Status()
-		return w
-	}
-
-	first := post(body)
+	first := postPayOS(fx, body)
 	if first.Code != http.StatusOK || first.Body.String() != `{"success":true}` {
 		t.Fatalf("payos ack = %d %q", first.Code, first.Body.String())
 	}
-	if second := post(body); second.Code != http.StatusOK {
+	if second := postPayOS(fx, body); second.Code != http.StatusOK {
 		t.Fatalf("payos retry ack = %d: %s", second.Code, second.Body.String())
 	}
 	got, err := fx.s.GetPaymentOrderByCode(fx.ctx, order.Code)
@@ -866,7 +949,7 @@ func TestPayOSWebhookVerifiesChecksumAndSettles(t *testing.T) {
 	}
 
 	bad := bytes.Replace(body, []byte(`"signature":"`), []byte(`"signature":"dead`), 1)
-	if w := post(bad); w.Code != http.StatusUnauthorized {
+	if w := postPayOS(fx, bad); w.Code != http.StatusUnauthorized {
 		t.Fatalf("bad checksum = %d, want 401", w.Code)
 	}
 }

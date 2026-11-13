@@ -192,6 +192,19 @@ func (h *PaymentsWebhookHandler) verifiedOrder(c *gin.Context, ev provider.Webho
 	return peeked, true
 }
 
+// sameConfigScope reports whether two resolved configs name the same
+// account: same provider (Resolve stores it normalised), same mode and
+// same product. bindConfig re-resolves the order's product only to see
+// whether a product-scoped row exists, so the product is the comparison
+// that matters; provider and mode keep a re-resolution that somehow
+// landed on a different row from passing as "the same config".
+func sameConfigScope(a, b *providercfg.ResolvedConfig) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return strings.EqualFold(a.Provider, b.Provider) && a.Mode == b.Mode && a.ProductID == b.ProductID
+}
+
 // bindConfig proves the row that verified a delivery is the row the
 // order's product uses. The unverified peek chooses the secret, so a
 // signed body can name one product's order where the peek reads and
@@ -213,19 +226,29 @@ func (h *PaymentsWebhookHandler) bindConfig(c *gin.Context, providerName string,
 		h.rejectBinding(c, providerName, order, cfg, "another product's account verified the delivery")
 		return false
 	}
-	// The install default verified it. That is right only while the
-	// order's product has no row of its own; a product row must never be
-	// bypassed by a default-secret delivery.
-	if _, err := h.Config.Resolve(c.Request.Context(), order.ProductID, providerName, cfg.Mode); err == nil {
-		h.rejectBinding(c, providerName, order, cfg, "the install default verified a product that has its own account")
-		return false
-	} else if !errors.Is(err, providercfg.ErrProviderNotConfigured) {
+	// The install default verified it. Resolve falls back to the install
+	// default when the order's product has no row, so a nil error alone
+	// does not prove the product has an account of its own: only a
+	// re-resolved, product-scoped row that differs from the verifying
+	// config means the default bypassed it. A default-only install
+	// resolves to the same default again and passes.
+	resolved, err := h.Config.Resolve(c.Request.Context(), order.ProductID, providerName, cfg.Mode)
+	switch {
+	case err == nil:
+		if resolved.ProductID != "" && !sameConfigScope(resolved, cfg) {
+			h.rejectBinding(c, providerName, order, cfg, "the install default verified a product that has its own account")
+			return false
+		}
+		return true
+	case errors.Is(err, providercfg.ErrProviderNotConfigured):
+		// No product row and no install default: nothing to bypass.
+		return true
+	default:
 		// A disabled or unusable product row is not permission to fall
 		// back to the default either.
 		h.rejectBinding(c, providerName, order, cfg, "the order's product has an unusable account")
 		return false
 	}
-	return true
 }
 
 func (h *PaymentsWebhookHandler) rejectBinding(c *gin.Context, providerName string, order *model.PaymentOrder, cfg *providercfg.ResolvedConfig, reason string) {
