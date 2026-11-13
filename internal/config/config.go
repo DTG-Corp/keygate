@@ -25,6 +25,13 @@ type Config struct {
 
 	StripeSecretKey     string
 	StripeWebhookSecret string
+
+	// PaymentMode is the provider-configuration mode used when a resolver
+	// call omits one (PAYMENT_MODE, "live" by default). The environment
+	// does not force a mode: a self-hosted install can keep both a test
+	// and a live row; this only picks the fallback, and an explicit mode
+	// always wins.
+	PaymentMode string
 	// StripeLivemode tells the webhook handler which environment to
 	// trust. A mismatch between this flag and event.Livemode is a
 	// configuration error or a forged delivery; either way the
@@ -129,6 +136,8 @@ func Load() (*Config, error) {
 
 		StripeSecretKey:     os.Getenv("STRIPE_SECRET_KEY"),
 		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
+
+		PaymentMode: strings.ToLower(strings.TrimSpace(envOr("PAYMENT_MODE", "live"))),
 	}
 
 	envVal, envSet := os.LookupEnv("STRIPE_LIVEMODE")
@@ -186,6 +195,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.LicenseSigningKey == "" {
 		return nil, fmt.Errorf("LICENSE_SIGNING_KEY is required")
+	}
+	if cfg.PaymentMode != "test" && cfg.PaymentMode != "live" {
+		return nil, fmt.Errorf("PAYMENT_MODE must be 'test' or 'live', got %q", cfg.PaymentMode)
 	}
 
 	return cfg, nil

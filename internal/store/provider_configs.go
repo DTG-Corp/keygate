@@ -19,6 +19,10 @@ var ErrProviderConfigNotFound = errors.New("payment provider config not found")
 // already stored alone (a blank secret in the admin form means "keep
 // the current one"), and a new row starts with the empty bytea default.
 type ProviderConfigInput struct {
+	// ID is the primary key the caller sealed the encrypted fields
+	// against. The AAD binds each ciphertext to this id, so a create must
+	// insert under it; an empty ID generates a fresh one.
+	ID                     string
 	Provider               string
 	ProductID              string
 	Mode                   string
@@ -42,7 +46,11 @@ func (s *Store) UpsertPaymentProviderConfig(ctx context.Context, in ProviderConf
 	case err == nil:
 		row = existing
 	case errors.Is(err, sql.ErrNoRows):
-		row = &model.PaymentProviderConfig{ID: NewID(), Provider: in.Provider, ProductID: in.ProductID, Mode: in.Mode, CreatedAt: time.Now()}
+		id := in.ID
+		if id == "" {
+			id = NewID()
+		}
+		row = &model.PaymentProviderConfig{ID: id, Provider: in.Provider, ProductID: in.ProductID, Mode: in.Mode, CreatedAt: time.Now()}
 	default:
 		return nil, err
 	}
@@ -67,8 +75,13 @@ func (s *Store) UpsertPaymentProviderConfig(ctx context.Context, in ProviderConf
 	err = s.DB.NewInsert().Model(row).On("CONFLICT (provider, product_id, mode) DO UPDATE").
 		Set("enabled = EXCLUDED.enabled").
 		Set("config = EXCLUDED.config").
-		Set(`credentials_encrypted = COALESCE(NULLIF(EXCLUDED.credentials_encrypted, ''::bytea), "payment_provider_config".credentials_encrypted)`).
-		Set(`webhook_secret_encrypted = COALESCE(NULLIF(EXCLUDED.webhook_secret_encrypted, ''::bytea), "payment_provider_config".webhook_secret_encrypted)`).
+		// Only write ciphertext the caller sealed for this row. When a
+		// concurrent insert wins the slot between the lookup above and
+		// this statement, EXCLUDED carries a different id and its
+		// ciphertext is bound to that discarded id: keep the winner's
+		// bytes and let the caller re-seal against the returned row.
+		Set(`credentials_encrypted = CASE WHEN "payment_provider_config".id = EXCLUDED.id THEN EXCLUDED.credentials_encrypted ELSE "payment_provider_config".credentials_encrypted END`).
+		Set(`webhook_secret_encrypted = CASE WHEN "payment_provider_config".id = EXCLUDED.id THEN EXCLUDED.webhook_secret_encrypted ELSE "payment_provider_config".webhook_secret_encrypted END`).
 		Set("updated_at = now()").
 		Returning("*").Scan(ctx)
 	if err != nil {
@@ -104,9 +117,11 @@ func (s *Store) FindPaymentProviderConfig(ctx context.Context, provider, product
 	return row, err
 }
 
-// ClearProviderSecrets blanks the named encrypted columns. The row and
-// its id stay: the AAD of anything else stored on it is unaffected.
-func (s *Store) ClearProviderSecrets(ctx context.Context, id string, credentials, webhookSecret bool) error {
+// ClearProviderSecrets blanks the named encrypted columns and reports
+// how many rows were updated. The row and its id stay: the AAD of
+// anything else stored on it is unaffected. A zero count means no row
+// carried that id, which the API turns into a 404.
+func (s *Store) ClearProviderSecrets(ctx context.Context, id string, credentials, webhookSecret bool) (int64, error) {
 	q := s.DB.NewUpdate().Model((*model.PaymentProviderConfig)(nil)).Set("updated_at = now()").Where("id = ?", id)
 	if credentials {
 		q = q.Set("credentials_encrypted = ''::bytea")
@@ -114,6 +129,9 @@ func (s *Store) ClearProviderSecrets(ctx context.Context, id string, credentials
 	if webhookSecret {
 		q = q.Set("webhook_secret_encrypted = ''::bytea")
 	}
-	_, err := q.Exec(ctx)
-	return err
+	res, err := q.Exec(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

@@ -1182,11 +1182,12 @@ func main() {
 		// Provider rows are admin-only: the PUT carries merchant
 		// secrets, so a licenses:write key must not reach it. Without
 		// the master key the routes stay unregistered rather than
-		// store credentials unencrypted. "live" is only the fallback
-		// for a request that omits its mode — each row carries the
-		// mode it was written under.
+		// store credentials unencrypted. PAYMENT_MODE (default live)
+		// is only the fallback for a request that omits its mode —
+		// each row carries the mode it was written under, and an
+		// explicit mode always wins.
 		if paymentCodec != nil {
-			providerSvc := providercfg.NewService(db, paymentCodec, "live")
+			providerSvc := providercfg.NewService(db, paymentCodec, cfg.PaymentMode)
 			providerH := handler.PaymentProviderAdminHandler{Service: providerSvc, Store: db}
 			admin.GET("/payments/providers", providerH.List)
 			admin.PUT("/payments/providers", providerH.Upsert)
