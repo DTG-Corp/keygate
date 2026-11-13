@@ -18,6 +18,10 @@ func TestProviderAdminNeverReturnsSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The admin endpoints write the install-wide slot by default; it must
+	// not outlive the test, or the next package resolving it fails to
+	// decrypt the row this test's codec sealed.
+	f.cleanupProviderConfigSlots(t, providerConfigSlot{Provider: "sepay", Mode: "live"})
 	svc := providercfg.NewService(f.s, codec, "live")
 	h := &PaymentProviderAdminHandler{Service: svc}
 
@@ -113,6 +117,10 @@ func providerHandler(t *testing.T) (*apiFixture, *PaymentProviderAdminHandler) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A save without product_id writes the install-wide slot; remove it
+	// when the test ends so it cannot leak into another package that
+	// resolves the same default with its own master key.
+	f.cleanupProviderConfigSlots(t, providerConfigSlot{Provider: "sepay", Mode: "live"})
 	return f, &PaymentProviderAdminHandler{Service: providercfg.NewService(f.s, codec, "live")}
 }
 

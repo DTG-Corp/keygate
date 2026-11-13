@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -84,6 +85,23 @@ func newWebhookFixture(t *testing.T, perProduct bool) *webhookFixture {
 		sepayProductIDs = append(sepayProductIDs, f.prodA.ID)
 		payosProductID = f.prodA.ID
 	}
+	// Register the cleanup before the first write, so a setup failure
+	// half-way through still leaves the database clean. The install-wide
+	// slots are always listed: even when this variant does not write one,
+	// deleting the slot removes a row an earlier run left there, and that
+	// row would otherwise be sealed with this package's codec and break
+	// another package resolving the same install default.
+	slots := []providerConfigSlot{
+		{Provider: "sepay", Mode: "live"},
+		{Provider: "payos", Mode: "live"},
+	}
+	if perProduct {
+		slots = append(slots,
+			providerConfigSlot{Provider: "sepay", ProductID: f.prodA.ID, Mode: "live"},
+			providerConfigSlot{Provider: "payos", ProductID: f.prodA.ID, Mode: "live"},
+		)
+	}
+	f.cleanupProviderConfigSlots(t, slots...)
 	for _, productID := range sepayProductIDs {
 		if _, err := cfgSvc.Upsert(f.ctx, providercfg.UpsertInput{
 			Provider: "sepay", ProductID: productID, Mode: "live", Enabled: true,
@@ -122,6 +140,36 @@ func newWebhookFixture(t *testing.T, perProduct bool) *webhookFixture {
 		t.Fatalf("create webhook: %v", err)
 	}
 	return &webhookFixture{apiFixture: f, handler: h, config: cfgSvc, secret: sepayWebhookSecret, webhookID: hook.ID}
+}
+
+// The integration database is shared by every package and outlives one
+// run. An install-wide provider row this package sealed must therefore
+// not survive the fixture that wrote it: providercfg resolves the same
+// slot with a different master key and would report ErrProviderConfigInvalid
+// instead of falling back to "not configured", which is how the default-only
+// webhook fixture used to turn the full suite red.
+func TestWebhookFixturesLeaveNoInstallWideProviderRows(t *testing.T) {
+	f := newAPIFixture(t)
+	assertGone := func(provider, productID, mode string) {
+		t.Helper()
+		row, err := f.s.FindPaymentProviderConfig(f.ctx, provider, productID, mode)
+		if !errors.Is(err, store.ErrProviderConfigNotFound) {
+			t.Fatalf("%s/%q/%s survived fixture cleanup: row=%+v err=%v", provider, productID, mode, row, err)
+		}
+	}
+
+	t.Run("default-only fixture", func(t *testing.T) {
+		newDefaultOnlyWebhookFixture(t)
+	})
+	assertGone("sepay", "", "live")
+	assertGone("payos", "", "live")
+
+	t.Run("per-product fixture", func(t *testing.T) {
+		fx := newSepayWebhookFixture(t)
+		fx.addSepayProduct(t, fx.prodB.ID, "whsec_cleanup_b")
+	})
+	assertGone("sepay", "", "live")
+	assertGone("sepay", f.prodB.ID, "live")
 }
 
 func (fx *webhookFixture) newOrder(t *testing.T, kind, providerName string) *model.PaymentOrder {
@@ -174,6 +222,7 @@ func eventIDFor(productID string, id int64) string {
 // webhook secret, so a test can hold two accounts in one install.
 func (fx *webhookFixture) addSepayProduct(t *testing.T, productID, secret string) {
 	t.Helper()
+	fx.cleanupProviderConfigSlots(t, providerConfigSlot{Provider: "sepay", ProductID: productID, Mode: "live"})
 	if _, err := fx.config.Upsert(fx.ctx, providercfg.UpsertInput{
 		Provider: "sepay", ProductID: productID, Mode: "live", Enabled: true,
 		Config: providercfg.SepayConfig{
@@ -640,7 +689,9 @@ func TestSePayWebhookLiveNoneConfigIsRefused(t *testing.T) {
 	fx := newSepayWebhookFixture(t)
 	// Product B has no provider row yet, so this creates rather than
 	// updates the slot (an update would keep the old id and the
-	// ciphertext sealed against a discarded one).
+	// ciphertext sealed against a discarded one). Raw inserts do not go
+	// through the fixture, so register their slot explicitly.
+	fx.cleanupProviderConfigSlots(t, providerConfigSlot{Provider: "sepay", ProductID: fx.prodB.ID, Mode: "live"})
 	order := fx.newOrderOn(t, fx.prodB.ID, fx.planB.ID, "new", "sepay")
 
 	codec, err := providercfg.NewCodec(bytes.Repeat([]byte{0x31}, 32))
