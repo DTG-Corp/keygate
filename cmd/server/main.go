@@ -34,6 +34,7 @@ import (
 	"github.com/tabloy/keygate/internal/model"
 	"github.com/tabloy/keygate/internal/payment"
 	"github.com/tabloy/keygate/internal/payment/providercfg"
+	"github.com/tabloy/keygate/internal/payment/settlement"
 	"github.com/tabloy/keygate/internal/service"
 	"github.com/tabloy/keygate/internal/storage"
 	"github.com/tabloy/keygate/internal/store"
@@ -443,6 +444,20 @@ func main() {
 	}
 	// Initialize thread-safe webhook secret with config value
 	stripeH.SetWebhookSecret(cfg.StripeWebhookSecret)
+
+	// Payment provider webhooks (SePay bank/IPN, PayOS) need the same
+	// provider resolver as checkout and, once verified, the settlement
+	// service. Without the master key no row can be decrypted, so the
+	// routes stay unregistered instead of answering a webhook nothing
+	// can verify.
+	var providerSvc *providercfg.Service
+	if paymentCodec != nil {
+		providerSvc = providercfg.NewService(db, paymentCodec, cfg.PaymentMode)
+	}
+	settleSvc := &settlement.Service{Store: db, Webhooks: webhookSvc, Log: logger}
+	paymentsWebhookH := &handler.PaymentsWebhookHandler{
+		Store: db, Config: providerSvc, Settlement: settleSvc, Log: logger,
+	}
 	expiryChecker := service.NewExpiryChecker(db, emailSvc, webhookSvc, logger)
 	if cfg.StripeSecretKey != "" {
 		expiryChecker.EndPastDueUpgrade = stripeH.EndPastDueUpgrade
@@ -909,6 +924,27 @@ func main() {
 		publicPlansH.List)
 
 	v1.POST("/webhook/stripe", middleware.RateLimitByIPScoped("stripe_webhook", 60, time.Minute), stripeH.Webhook)
+
+	// Bank-rail webhooks read the request body themselves: the
+	// signature covers the provider's exact bytes, so these routes are
+	// registered outside every JSON-binding group and envelope wrapper.
+	// Each has its own limiter bucket; a retry storm for one provider
+	// must not spend another provider's or a login page's budget.
+	//
+	// SePay's optional IP allowlist is phase-1b: ParseBankWebhook gets
+	// headers and body, not the peer address, so phase 1a relies on the
+	// authenticated webhook (HMAC or Apikey) as the gate.
+	if providerSvc != nil {
+		v1.POST("/webhook/sepay",
+			middleware.RateLimitByIPScoped("sepay_webhook", 120, time.Minute),
+			paymentsWebhookH.HandleSePay)
+		v1.POST("/webhook/sepay-ipn",
+			middleware.RateLimitByIPScoped("sepay_ipn", 120, time.Minute),
+			paymentsWebhookH.HandleSePayIPN)
+		v1.POST("/webhook/payos",
+			middleware.RateLimitByIPScoped("payos_webhook", 120, time.Minute),
+			paymentsWebhookH.HandlePayOS)
+	}
 	// Stripe verify is hit by every successful checkout return, so the
 	// limit is generous, but the endpoint must NOT be naked: each call
 	// proxies to Stripe's API and an attacker could otherwise force us
@@ -1186,8 +1222,7 @@ func main() {
 		// is only the fallback for a request that omits its mode —
 		// each row carries the mode it was written under, and an
 		// explicit mode always wins.
-		if paymentCodec != nil {
-			providerSvc := providercfg.NewService(db, paymentCodec, cfg.PaymentMode)
+		if providerSvc != nil {
 			providerH := handler.PaymentProviderAdminHandler{Service: providerSvc, Store: db}
 			admin.GET("/payments/providers", providerH.List)
 			admin.PUT("/payments/providers", providerH.Upsert)

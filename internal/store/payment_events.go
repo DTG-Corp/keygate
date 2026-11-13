@@ -77,3 +77,17 @@ func (s *Store) RecordPaymentEvent(ctx context.Context, tx bun.IDB, in PaymentEv
 	}
 	return n == 1, nil
 }
+
+// ForgetPaymentEvent removes one recorded event. The webhook handler
+// records the event before settling so a duplicate cannot grant twice;
+// when settlement then fails, it calls this so the provider's 500-retry
+// can claim the event again instead of being answered with a duplicate
+// ack for an order that never settled.
+func (s *Store) ForgetPaymentEvent(ctx context.Context, providerName, eventID string) error {
+	if eventID == "" {
+		return fmt.Errorf("%w: provider event id is required", ErrPaymentEventInvalid)
+	}
+	_, err := s.DB.NewDelete().Model((*model.PaymentEvent)(nil)).
+		Where("provider = ?", providerName).Where("event_id = ?", eventID).Exec(ctx)
+	return err
+}
