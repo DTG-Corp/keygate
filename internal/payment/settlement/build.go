@@ -10,10 +10,10 @@ import (
 )
 
 // buildNewLicense assembles the licence row for a paid new-order. It
-// reads the plan as it is now; CreateLicenseWithSubscription re-reads it
-// on its own transaction and refuses a plan that no longer sells the same
-// kind of licence the order was priced from (ErrPlanChanged), which is
-// the same protection the Stripe path has.
+// reads the plan as it is now; CreatePaidOrderLicence re-reads it on the
+// settlement's transaction and refuses a plan that no longer sells the
+// same kind of licence the order was priced from (ErrPlanChanged), which
+// is the same protection the Stripe path has.
 func buildNewLicense(ctx context.Context, s *store.Store, order *model.PaymentOrder) (*model.License, *model.Plan, error) {
 	plan, err := s.FindPlanByID(ctx, order.PlanID)
 	if err != nil {
@@ -38,13 +38,24 @@ func buildNewLicense(ctx context.Context, s *store.Store, order *model.PaymentOr
 		LicenseKey: key, Status: model.StatusActive, Quantity: order.Quantity,
 		PaymentProvider: order.Provider,
 	}
-	if plan.LicenseType == "perpetual" {
+	switch plan.LicenseType {
+	case "perpetual":
 		// Perpetual: valid forever, updates for the purchased window
 		// (nil when the plan says lifetime).
 		lic.UpdatesUntil = plan.InitialUpdatesUntil(now)
 		lic.UpdatesTermsSet = true
-	} else {
-		// A subscription/trial plan's first period ends at the order's
+	case "trial":
+		// A paid trial buys a trial, not a paid subscription: the
+		// status is what the expiry sweep and the trial fallback read.
+		lic.Status = model.StatusTrialing
+		end := order.PeriodEnd
+		if end == nil {
+			e := now.Add(firstPeriod(plan))
+			end = &e
+		}
+		lic.ValidUntil = end
+	default:
+		// A subscription plan's first period ends at the order's
 		// reserved period_end; with none reserved, one billing interval
 		// from now.
 		end := order.PeriodEnd
@@ -55,6 +66,20 @@ func buildNewLicense(ctx context.Context, s *store.Store, order *model.PaymentOr
 		lic.ValidUntil = end
 	}
 	return lic, plan, nil
+}
+
+// firstPeriod is the first period a recurring plan sells when the order
+// reserved none: the trial length for a trial plan, otherwise one
+// billing interval.
+func firstPeriod(plan *model.Plan) time.Duration {
+	if plan.LicenseType == "trial" {
+		days := plan.TrialDays
+		if days <= 0 {
+			days = 30
+		}
+		return time.Duration(days) * 24 * time.Hour
+	}
+	return intervalDuration(plan.BillingInterval)
 }
 
 // intervalDuration is the length of one billing interval as the plan

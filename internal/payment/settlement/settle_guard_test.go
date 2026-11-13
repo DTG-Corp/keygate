@@ -1,8 +1,11 @@
 package settlement_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -180,5 +183,130 @@ func TestRecordUnmatchedRecordsTransactionWithoutOrder(t *testing.T) {
 	}
 	if status != domain.TxUnmatched || orderID.Valid || amount != 5000 {
 		t.Fatalf("row = %q, %v, %d", status, orderID, amount)
+	}
+}
+
+// A provider event that reports no amount cannot settle a priced order:
+// zero is not "the provider did not say" for a real transfer, it is a
+// mismatch, and it must never buy a licence for free.
+func TestSettleZeroAmountDoesNotGrant(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	prod, plan := seedPricedPlan(t, s, "perpetual", "", 0)
+	email := "zero-" + uuid.NewString()[:8] + "@example.com"
+	order, err := s.CreatePaymentOrder(ctx, store.CreateOrderInput{
+		ProductID: prod.ID, PlanID: plan.ID, Email: email, Kind: "new", Quantity: 1,
+		SubtotalMinor: 1190000, TotalMinor: 1190000, Currency: "VND", Provider: "payos",
+		ExpiresAt: time.Now().Add(time.Hour), Buyer: []byte(`{}`), Metadata: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	webhooks, wh := webhookFixture(t, s, prod.ID, "order.paid", "payment.succeeded")
+	svc := &settlement.Service{Store: s, Webhooks: webhooks, Log: testLogger()}
+	ev := provider.WebhookEvent{Provider: "payos", ProviderEventID: "zero-1", ProviderRef: "zero-" + uuid.NewString()[:8],
+		OrderCode: order.Code, AmountMinor: 0, Currency: "VND",
+		Status: domain.OrderPaid, TransferType: "in", Raw: []byte(`{}`), OccurredAt: time.Now()}
+	if err := svc.Settle(ctx, order.ID, "payos", ev); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	got, err := s.GetPaymentOrderByCode(ctx, order.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.OrderPending {
+		t.Fatalf("order = %q, want pending", got.Status)
+	}
+	if n := countLicences(t, s, email); n != 0 {
+		t.Fatalf("licences = %d, want 0", n)
+	}
+	if n := countUnmatchedForOrder(t, s, order.ID); n != 1 {
+		t.Fatalf("unmatched transactions = %d, want 1", n)
+	}
+	if deliveries := deliveriesByEvent(t, s, wh.ID); len(deliveries) != 0 {
+		t.Fatalf("deliveries = %v, want none", deliveries)
+	}
+}
+
+// The amount matching is not enough when the currency is not the
+// order's: 1,190,000 of something else is not this order's money.
+func TestSettleWrongCurrencyDoesNotGrant(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	prod, plan := seedPricedPlan(t, s, "perpetual", "", 0)
+	email := "currency-" + uuid.NewString()[:8] + "@example.com"
+	order, err := s.CreatePaymentOrder(ctx, store.CreateOrderInput{
+		ProductID: prod.ID, PlanID: plan.ID, Email: email, Kind: "new", Quantity: 1,
+		SubtotalMinor: 1190000, TotalMinor: 1190000, Currency: "VND", Provider: "payos",
+		ExpiresAt: time.Now().Add(time.Hour), Buyer: []byte(`{}`), Metadata: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := &settlement.Service{Store: s, Log: testLogger()}
+	ev := provider.WebhookEvent{Provider: "payos", ProviderEventID: "cur-1", ProviderRef: "cur-" + uuid.NewString()[:8],
+		OrderCode: order.Code, AmountMinor: 1190000, Currency: "USD",
+		Status: domain.OrderPaid, TransferType: "in", Raw: []byte(`{}`), OccurredAt: time.Now()}
+	if err := svc.Settle(ctx, order.ID, "payos", ev); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	got, err := s.GetPaymentOrderByCode(ctx, order.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.OrderPending {
+		t.Fatalf("order = %q, want pending", got.Status)
+	}
+	if n := countLicences(t, s, email); n != 0 {
+		t.Fatalf("licences = %d, want 0", n)
+	}
+	if n := countUnmatchedForOrder(t, s, order.ID); n != 1 {
+		t.Fatalf("unmatched transactions = %d, want 1", n)
+	}
+}
+
+// Late money against a terminal order is acked for the operator (the
+// unmatched queue) but grants nothing, emits nothing, and is logged.
+func TestSettleTerminalOrderRecordsUnmatchedWithoutEvents(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	prod, plan := seedPricedPlan(t, s, "perpetual", "", 0)
+	email := "terminal-" + uuid.NewString()[:8] + "@example.com"
+	order := newOrder(t, s, prod, plan, "new", email)
+	if _, err := s.DB.NewRaw("UPDATE payment_orders SET status = ? WHERE id = ?", domain.OrderExpired, order.ID).
+		Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	webhooks, wh := webhookFixture(t, s, prod.ID, "order.paid", "payment.succeeded", "payment.failed")
+	var logged bytes.Buffer
+	svc := &settlement.Service{Store: s, Webhooks: webhooks,
+		Log: slog.New(slog.NewTextHandler(&logged, nil))}
+	ev := provider.WebhookEvent{Provider: "sepay", ProviderEventID: "term-1", ProviderRef: "term-" + uuid.NewString()[:8],
+		OrderCode: order.Code, AmountMinor: 1190000, Currency: "VND",
+		Status: domain.OrderPaid, TransferType: "in", Raw: []byte(`{}`), OccurredAt: time.Now()}
+	if err := svc.Settle(ctx, order.ID, "sepay", ev); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	got, err := s.GetPaymentOrderByCode(ctx, order.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.OrderExpired || got.PaidAt != nil {
+		t.Fatalf("order = %+v, want expired and unpaid", got)
+	}
+	if got.LicenseID != "" {
+		t.Fatalf("license_id = %q on an expired order", got.LicenseID)
+	}
+	if n := countLicences(t, s, email); n != 0 {
+		t.Fatalf("licences = %d, want 0", n)
+	}
+	if n := countUnmatchedForOrder(t, s, order.ID); n != 1 {
+		t.Fatalf("unmatched transactions = %d, want 1", n)
+	}
+	if deliveries := deliveriesByEvent(t, s, wh.ID); len(deliveries) != 0 {
+		t.Fatalf("deliveries = %v, want none", deliveries)
+	}
+	if !strings.Contains(logged.String(), "terminal") {
+		t.Fatalf("log does not mention the terminal order: %s", logged.String())
 	}
 }
