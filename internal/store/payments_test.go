@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -141,10 +142,16 @@ func TestExpirePaymentOrders(t *testing.T) {
 	s := testdb.Store(t)
 	ctx := context.Background()
 	productID, planID := seedProductPlan(t, s)
+	// Create with a valid future expiry (CreatePaymentOrder rejects an
+	// expiry that has already passed), then move it into the past: that is
+	// the state a running checkout reaches as time passes.
 	in := newOrderInput(productID, planID)
-	in.ExpiresAt = time.Now().Add(-time.Minute)
 	order, err := s.CreatePaymentOrder(ctx, in)
 	if err != nil {
+		t.Fatal(err)
+	}
+	backdate := `UPDATE payment_orders SET expires_at = now() - interval '1 minute' WHERE id = ?`
+	if _, err := s.DB.NewRaw(backdate, order.ID).Exec(ctx); err != nil {
 		t.Fatal(err)
 	}
 	n, err := s.ExpirePaymentOrders(ctx, time.Now())
@@ -160,9 +167,11 @@ func TestExpirePaymentOrders(t *testing.T) {
 	}
 	// A paid order must not be expired afterwards.
 	paidIn := newOrderInput(productID, planID)
-	paidIn.ExpiresAt = time.Now().Add(-time.Minute)
 	paidOrder, err := s.CreatePaymentOrder(ctx, paidIn)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.NewRaw(backdate, paidOrder.ID).Exec(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.MarkPaymentOrderPaid(ctx, nil, paidOrder.ID, time.Now()); err != nil {
@@ -385,5 +394,417 @@ func TestPaymentOrderConcurrentPayGrantsOnce(t *testing.T) {
 	}
 	if stored.Status != domain.OrderPaid || stored.PaidAt == nil {
 		t.Fatalf("order after the race = %+v", stored)
+	}
+}
+
+// TestPaymentOrderNilJSONDefaults pins that a nil (and an empty) buyer or
+// metadata is written as the schema's '{}' rather than SQL NULL. The
+// columns are NOT NULL, so passing the input through untouched fails the
+// insert with an opaque 23502.
+func TestPaymentOrderNilJSONDefaults(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	productID, planID := seedProductPlan(t, s)
+
+	for _, tc := range []struct {
+		name        string
+		buyer, meta []byte
+	}{
+		{"nil", nil, nil},
+		{"empty", []byte{}, []byte{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := newOrderInput(productID, planID)
+			in.Buyer, in.Metadata = tc.buyer, tc.meta
+			order, err := s.CreatePaymentOrder(ctx, in)
+			if err != nil {
+				t.Fatalf("create with %s buyer/metadata: %v", tc.name, err)
+			}
+			got, err := s.GetPaymentOrderByCode(ctx, order.Code)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got.Buyer) != "{}" || string(got.Metadata) != "{}" {
+				t.Fatalf("buyer = %s, metadata = %s, want both {}", got.Buyer, got.Metadata)
+			}
+		})
+	}
+}
+
+// TestPaymentAttemptNilRawDefault pins the same default on an attempt's
+// raw provider response: nil would be written as NULL, which the column
+// forbids.
+func TestPaymentAttemptNilRawDefault(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	productID, planID := seedProductPlan(t, s)
+	order, err := s.CreatePaymentOrder(ctx, newOrderInput(productID, planID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &model.PaymentAttempt{
+		OrderID: order.ID, Provider: "sepay", Status: domain.AttemptCreated,
+		AmountMinor: order.TotalMinor, Currency: order.Currency,
+	}
+	if err := s.CreatePaymentAttempt(ctx, a); err != nil {
+		t.Fatalf("create attempt with nil raw: %v", err)
+	}
+	got, err := s.GetLatestPaymentAttempt(ctx, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got.Raw) != "{}" {
+		t.Fatalf("raw = %s, want {}", got.Raw)
+	}
+}
+
+// TestPaymentAttemptStatusUpdateKeepsProviderRef pins that a status-only
+// update (providerRef "") does not clear the reference the attempt was
+// created with, which would also free its unique slot for another
+// attempt.
+func TestPaymentAttemptStatusUpdateKeepsProviderRef(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	productID, planID := seedProductPlan(t, s)
+	order, err := s.CreatePaymentOrder(ctx, newOrderInput(productID, planID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &model.PaymentAttempt{
+		OrderID: order.ID, Provider: "sepay", ProviderRef: "sepay-ref-keep",
+		Status: domain.AttemptPending, AmountMinor: order.TotalMinor, Currency: order.Currency,
+		Raw: json.RawMessage(`{}`),
+	}
+	if err := s.CreatePaymentAttempt(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.UpdatePaymentAttemptStatus(ctx, a.ID, domain.AttemptSucceeded, ""); err != nil {
+		t.Fatalf("status-only update: %v", err)
+	}
+	got, err := s.GetLatestPaymentAttempt(ctx, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ProviderRef != "sepay-ref-keep" {
+		t.Fatalf("provider_ref = %q after a status-only update, want the original sepay-ref-keep", got.ProviderRef)
+	}
+	if got.Status != domain.AttemptSucceeded {
+		t.Fatalf("status = %q, want succeeded", got.Status)
+	}
+
+	// A non-empty ref still replaces the old one.
+	if err := s.UpdatePaymentAttemptStatus(ctx, a.ID, domain.AttemptFailed, "sepay-ref-new"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.GetLatestPaymentAttempt(ctx, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ProviderRef != "sepay-ref-new" || got.Status != domain.AttemptFailed {
+		t.Fatalf("attempt after ref replacement = %+v", got)
+	}
+}
+
+// TestPaymentAttemptLatestDeterministicOnSameTimestamp pins the tie
+// breaker: two attempts written at the same created_at must always answer
+// the same "latest", the one with the greater id. The smaller id is
+// inserted first, so insertion/physical order answers the smaller one and
+// cannot pass for the contract's answer.
+func TestPaymentAttemptLatestDeterministicOnSameTimestamp(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	productID, planID := seedProductPlan(t, s)
+	order, err := s.CreatePaymentOrder(ctx, newOrderInput(productID, planID))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	at := time.Now().Add(-time.Minute).Truncate(time.Second)
+	const highID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+	const lowID = "00000000-0000-4000-8000-000000000000"
+	for _, id := range []string{lowID, highID} {
+		a := &model.PaymentAttempt{
+			ID: id, OrderID: order.ID, Provider: "sepay", Status: domain.AttemptCreated,
+			AmountMinor: order.TotalMinor, Currency: order.Currency,
+			Raw: json.RawMessage(`{}`), CreatedAt: at,
+		}
+		if err := s.CreatePaymentAttempt(ctx, a); err != nil {
+			t.Fatalf("create attempt %s: %v", id, err)
+		}
+	}
+
+	first, err := s.GetLatestPaymentAttempt(ctx, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.GetLatestPaymentAttempt(ctx, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != highID || second.ID != highID {
+		t.Fatalf("latest on a created_at tie = %q then %q, want the greater id %q both times", first.ID, second.ID, highID)
+	}
+}
+
+// TestPaymentOrderMarkPaidClearsSettlementError pins the returned
+// contract of a successful mark: the stored row no longer carries the
+// error a failed settlement left, updated_at moves, and the struct the
+// caller gets back is the row that was written.
+func TestPaymentOrderMarkPaidClearsSettlementError(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	productID, planID := seedProductPlan(t, s)
+	order, err := s.CreatePaymentOrder(ctx, newOrderInput(productID, planID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.NewRaw("UPDATE payment_orders SET last_settlement_error = 'bank timeout' WHERE id = ?", order.ID).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.GetPaymentOrderByCode(ctx, order.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	paid, err := s.MarkPaymentOrderPaid(ctx, nil, order.ID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paid.LastSettlementError != "" {
+		t.Fatalf("returned order still carries settlement error %q", paid.LastSettlementError)
+	}
+	if paid.Status != domain.OrderPaid || paid.PaidAt == nil {
+		t.Fatalf("returned order = %+v", paid)
+	}
+	if !paid.UpdatedAt.After(before.UpdatedAt) {
+		t.Fatalf("returned updated_at = %v, want later than the pre-mark %v", paid.UpdatedAt, before.UpdatedAt)
+	}
+	stored, err := s.GetPaymentOrderByCode(ctx, order.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.LastSettlementError != "" {
+		t.Fatalf("stored last_settlement_error = %q, want cleared", stored.LastSettlementError)
+	}
+	if !paid.UpdatedAt.Equal(stored.UpdatedAt) || !paid.PaidAt.Equal(*stored.PaidAt) {
+		t.Fatalf("returned order %+v is not the stored row %+v", paid, stored)
+	}
+}
+
+// TestPaymentOrderCancelClearsSettlementError is the cancel half of the
+// same contract.
+func TestPaymentOrderCancelClearsSettlementError(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	productID, planID := seedProductPlan(t, s)
+	order, err := s.CreatePaymentOrder(ctx, newOrderInput(productID, planID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.NewRaw("UPDATE payment_orders SET last_settlement_error = 'provider 500' WHERE id = ?", order.ID).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.GetPaymentOrderByCode(ctx, order.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	canceled, err := s.CancelPaymentOrder(ctx, order.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canceled.LastSettlementError != "" {
+		t.Fatalf("returned order still carries settlement error %q", canceled.LastSettlementError)
+	}
+	if canceled.Status != domain.OrderCanceled {
+		t.Fatalf("status = %q, want canceled", canceled.Status)
+	}
+	if !canceled.UpdatedAt.After(before.UpdatedAt) {
+		t.Fatalf("returned updated_at = %v, want later than the pre-cancel %v", canceled.UpdatedAt, before.UpdatedAt)
+	}
+	stored, err := s.GetPaymentOrderByCode(ctx, order.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.LastSettlementError != "" || !canceled.UpdatedAt.Equal(stored.UpdatedAt) {
+		t.Fatalf("returned order %+v is not the stored row %+v", canceled, stored)
+	}
+}
+
+// TestPaymentOrderRejectsInvalidInput pins the validation CreatePaymentOrder
+// performs before it touches the database: the schema would reject most of
+// these too, but with a CHECK/FK error instead of an answer the caller can
+// act on. Quantity 0 stays an error rather than silently becoming the
+// column default 1.
+func TestPaymentOrderRejectsInvalidInput(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	productID, planID := seedProductPlan(t, s)
+	ok := newOrderInput(productID, planID)
+
+	cases := []struct {
+		name   string
+		mutate func(*store.CreateOrderInput)
+	}{
+		{"zero expires_at", func(in *store.CreateOrderInput) { in.ExpiresAt = time.Time{} }},
+		{"past expires_at", func(in *store.CreateOrderInput) { in.ExpiresAt = time.Now().Add(-time.Minute) }},
+		{"negative subtotal", func(in *store.CreateOrderInput) { in.SubtotalMinor = -1 }},
+		{"negative discount", func(in *store.CreateOrderInput) { in.DiscountMinor = -1 }},
+		{"negative tax", func(in *store.CreateOrderInput) { in.TaxMinor = -1 }},
+		{"negative total", func(in *store.CreateOrderInput) { in.TotalMinor = -1 }},
+		{"zero quantity", func(in *store.CreateOrderInput) { in.Quantity = 0 }},
+		{"negative quantity", func(in *store.CreateOrderInput) { in.Quantity = -1 }},
+		{"empty product", func(in *store.CreateOrderInput) { in.ProductID = "" }},
+		{"empty plan", func(in *store.CreateOrderInput) { in.PlanID = "" }},
+		{"empty email", func(in *store.CreateOrderInput) { in.Email = "" }},
+		{"empty currency", func(in *store.CreateOrderInput) { in.Currency = "" }},
+		{"negative tax rate", func(in *store.CreateOrderInput) { in.TaxRateBP = -1 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := ok
+			tc.mutate(&in)
+			_, err := s.CreatePaymentOrder(ctx, in)
+			if !errors.Is(err, store.ErrOrderInvalidInput) {
+				t.Fatalf("CreatePaymentOrder(%s) = %v, want ErrOrderInvalidInput", tc.name, err)
+			}
+		})
+	}
+
+	var n int
+	if err := s.DB.NewRaw("SELECT count(*) FROM payment_orders WHERE product_id = ?", productID).Scan(ctx, &n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("%d orders were written by rejected inputs", n)
+	}
+}
+
+// TestPaymentAttemptStatusValidation pins the attempt-status vocabulary:
+// a status outside the schema CHECK is refused before the database sees
+// it, and an update that matches no row answers sql.ErrNoRows.
+func TestPaymentAttemptStatusValidation(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	productID, planID := seedProductPlan(t, s)
+	order, err := s.CreatePaymentOrder(ctx, newOrderInput(productID, planID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &model.PaymentAttempt{
+		OrderID: order.ID, Provider: "sepay", Status: domain.AttemptPending,
+		AmountMinor: order.TotalMinor, Currency: order.Currency, Raw: json.RawMessage(`{}`),
+	}
+	if err := s.CreatePaymentAttempt(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, status := range []string{"paid", "", "SUCCEEDED"} {
+		if err := s.UpdatePaymentAttemptStatus(ctx, a.ID, status, ""); !errors.Is(err, store.ErrAttemptStatusInvalid) {
+			t.Fatalf("status %q = %v, want ErrAttemptStatusInvalid", status, err)
+		}
+	}
+	got, err := s.GetLatestPaymentAttempt(ctx, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.AttemptPending {
+		t.Fatalf("status = %q after rejected updates, want pending", got.Status)
+	}
+
+	if err := s.UpdatePaymentAttemptStatus(ctx, uuid.NewString(), domain.AttemptFailed, ""); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("update of an unknown attempt = %v, want sql.ErrNoRows", err)
+	}
+}
+
+// TestPaymentOrderCancelErrorNaming pins the cancel-specific sentinel: a
+// paid order cannot be canceled, and that answer must not be
+// ErrOrderNotPayable, which settlement owns. Canceling twice is the same
+// answer.
+func TestPaymentOrderCancelErrorNaming(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	productID, planID := seedProductPlan(t, s)
+
+	paid, err := s.CreatePaymentOrder(ctx, newOrderInput(productID, planID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MarkPaymentOrderPaid(ctx, nil, paid.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CancelPaymentOrder(ctx, paid.Code); !errors.Is(err, store.ErrOrderNotCancelable) {
+		t.Fatalf("cancel paid = %v, want ErrOrderNotCancelable", err)
+	} else if errors.Is(err, store.ErrOrderNotPayable) {
+		t.Fatalf("cancel paid = %v, must not reuse ErrOrderNotPayable", err)
+	}
+
+	order, err := s.CreatePaymentOrder(ctx, newOrderInput(productID, planID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CancelPaymentOrder(ctx, order.Code); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CancelPaymentOrder(ctx, order.Code); !errors.Is(err, store.ErrOrderNotCancelable) {
+		t.Fatalf("second cancel = %v, want ErrOrderNotCancelable", err)
+	}
+}
+
+// TestPaymentOrderRenewalCollisionIsNotACodeRetry pins the retry
+// classifier: only a duplicate payment_orders.code is a collision worth a
+// fresh code. The other unique index on the table,
+// payment_orders_renewal_once, is a caller error and must fail on the
+// first attempt, not be retried five times as "could not allocate a code".
+func TestPaymentOrderRenewalCollisionIsNotACodeRetry(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	productID, planID := seedProductPlan(t, s)
+
+	licenseID := store.NewID()
+	if _, err := s.DB.NewRaw(
+		`INSERT INTO licenses (id, product_id, plan_id, email, license_key) VALUES (?, ?, ?, ?, ?)`,
+		licenseID, productID, planID, "renew@example.com", "KG-RENEW-"+licenseID,
+	).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = s.DB.NewRaw("DELETE FROM licenses WHERE id = ?", licenseID).Exec(context.Background())
+	})
+
+	calls := 0
+	orig := store.OrderCodeGeneratorForTest()
+	t.Cleanup(func() { store.SetOrderCodeGeneratorForTest(orig) })
+	store.SetOrderCodeGeneratorForTest(func() string {
+		calls++
+		return domain.NewOrderCode()
+	})
+
+	periodEnd := time.Now().Add(30 * 24 * time.Hour).Truncate(time.Second)
+	in := newOrderInput(productID, planID)
+	in.Kind, in.LicenseID, in.PeriodEnd = "renewal", licenseID, &periodEnd
+	if _, err := s.CreatePaymentOrder(ctx, in); err != nil {
+		t.Fatalf("first renewal: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("the order-code generator ran %d times for the first order, want 1", calls)
+	}
+
+	if _, err := s.CreatePaymentOrder(ctx, in); err == nil {
+		t.Fatal("a second pending renewal for the same license period was accepted")
+	} else if strings.Contains(err.Error(), "could not allocate an order code") {
+		t.Fatalf("renewal_once collision was retried as an order-code collision: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("the order-code generator ran %d times, want 2 (one per create): a renewal_once collision was retried", calls)
+	}
+
+	var n int
+	if err := s.DB.NewRaw("SELECT count(*) FROM payment_orders WHERE product_id = ?", productID).Scan(ctx, &n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("%d order rows exist after the rejected renewal, want 1", n)
 	}
 }

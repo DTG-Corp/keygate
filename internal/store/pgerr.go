@@ -25,6 +25,19 @@ func isUniqueViolation(err error) bool {
 	return false
 }
 
+// isUniqueViolationOn reports whether err is a unique-constraint
+// violation (SQLSTATE 23505) on the named constraint or unique index.
+// Postgres reports a unique index's own name in the constraint field, so
+// this matches both a table constraint (payment_orders_code_key) and a
+// standalone unique index (payment_orders_renewal_once).
+func isUniqueViolationOn(err error, constraint string) bool {
+	var pgErr pgdriver.Error
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Field('C') == "23505" && pgErr.Field('n') == constraint
+}
+
 // isDeadlock reports whether err is the losing side of a deadlock the
 // server broke (SQLSTATE 40P01).
 func isDeadlock(err error) bool {
