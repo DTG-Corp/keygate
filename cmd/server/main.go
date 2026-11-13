@@ -33,6 +33,7 @@ import (
 	"github.com/tabloy/keygate/internal/middleware"
 	"github.com/tabloy/keygate/internal/model"
 	"github.com/tabloy/keygate/internal/payment"
+	"github.com/tabloy/keygate/internal/payment/providercfg"
 	"github.com/tabloy/keygate/internal/service"
 	"github.com/tabloy/keygate/internal/storage"
 	"github.com/tabloy/keygate/internal/store"
@@ -349,6 +350,11 @@ func main() {
 	// Subkeys are purpose-isolated — ciphertext from one cannot decrypt
 	// under another.
 	var releaseSigner *service.ReleaseSigningService
+	// Provider secrets are sealed under the same master key with their
+	// own purpose. Without it the admin routes are not registered, so
+	// credentials cannot be written in plaintext; checkout then treats
+	// every provider as unconfigured.
+	var paymentCodec *providercfg.Codec
 	if cfg.IsMasterEncryptionKeyConfigured() {
 		masterRaw, err := hex.DecodeString(cfg.ReleaseKeyEncryptionKey)
 		if err != nil {
@@ -357,6 +363,14 @@ func main() {
 			// Wire license-key encryption — orthogonal to storage.
 			db.LicenseKeyAEAD = crypto.MustDeriveAEAD(masterRaw, "license-key")
 			logger.Info("license key encryption: enabled")
+
+			c, err := providercfg.NewCodec(masterRaw)
+			if err != nil {
+				logger.Error("payment provider config encryption disabled", "error", err)
+			} else {
+				paymentCodec = c
+				logger.Info("payment provider config encryption: enabled")
+			}
 
 			// Best-effort backfill of unencrypted historical rows. Non-blocking,
 			// resumable across restarts. No timeout — runs until done or shutdown.
@@ -1164,6 +1178,20 @@ func main() {
 		admin.GET("/plans/:id/prices", planPriceH.List)
 		admin.PUT("/plans/:id/prices", planPriceH.Upsert)
 		admin.DELETE("/plans/:id/prices/:price_id", planPriceH.Delete)
+
+		// Provider rows are admin-only: the PUT carries merchant
+		// secrets, so a licenses:write key must not reach it. Without
+		// the master key the routes stay unregistered rather than
+		// store credentials unencrypted. "live" is only the fallback
+		// for a request that omits its mode — each row carries the
+		// mode it was written under.
+		if paymentCodec != nil {
+			providerSvc := providercfg.NewService(db, paymentCodec, "live")
+			providerH := handler.PaymentProviderAdminHandler{Service: providerSvc, Store: db}
+			admin.GET("/payments/providers", providerH.List)
+			admin.PUT("/payments/providers", providerH.Upsert)
+			admin.DELETE("/payments/providers/:id/secrets", providerH.DeleteSecrets)
+		}
 
 		admin.POST("/entitlements", adminH.CreateEntitlement)
 		admin.PUT("/entitlements/:id", adminH.UpdateEntitlement)

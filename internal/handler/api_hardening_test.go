@@ -100,6 +100,30 @@ func errCode(out map[string]any) string {
 	return code
 }
 
+// bodyJSON runs a handler directly and returns the raw response body.
+func (f *apiFixture) bodyJSON(t *testing.T, fn gin.HandlerFunc, params ...gin.Param) []byte {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/", nil)
+	c.Params = params
+	fn(c)
+	return w.Body.Bytes()
+}
+
+// decodeData runs a handler and decodes the envelope's data field.
+func (f *apiFixture) decodeData(t *testing.T, fn gin.HandlerFunc, dst any, params ...gin.Param) error {
+	t.Helper()
+	var env struct {
+		Data any `json:"data"`
+	}
+	if err := json.Unmarshal(f.bodyJSON(t, fn, params...), &env); err != nil {
+		return err
+	}
+	raw, _ := json.Marshal(env.Data)
+	return json.Unmarshal(raw, dst)
+}
+
 // The export carries every plaintext key, so a key bound to one product
 // exports that product's licences only, like the list does.
 func TestExportLicensesHonoursKeyBinding(t *testing.T) {
