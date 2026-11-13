@@ -20,18 +20,21 @@ import (
 	"github.com/tabloy/keygate/internal/store"
 )
 
-// maxWebhookBody bounds one provider delivery. SePay and PayOS payloads
-// are a few KB; anything larger is a mistake or an attack, and it is
-// refused before it is buffered whole or handed to a parser.
-const maxWebhookBody = 1 << 20
+// maxWebhookBody bounds one provider delivery at the spec's 256 KiB.
+// SePay and PayOS payloads are a few KB; anything larger is a mistake or
+// an attack, and it is refused before it is buffered whole or handed to
+// a parser.
+const maxWebhookBody = 256 << 10
 
 // PaymentsWebhookHandler receives the SePay and PayOS webhook routes.
 //
 // Every handler reads the raw request body and passes those exact bytes
 // to the adapter: a signature covers the provider's bytes, not Go's
-// re-marshalling of the decoded struct. Only after the adapter has
-// verified and normalised the delivery does the handler look for the
-// order and settle it.
+// re-marshalling of the decoded struct. Before verification a small,
+// untrusted peek names the order whose product selects the config row
+// (and so the secret) that verifies the delivery; the verified event is
+// what names the order the handler audits and settles, and the row that
+// verified it must belong to that order's product (bindConfig).
 type PaymentsWebhookHandler struct {
 	Store      *store.Store
 	Config     *providercfg.Service
@@ -66,16 +69,6 @@ func ackJSON(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"success": true}) }
 
 // ackEmpty is the hosted-gateway IPN answer: 200 and no body.
 func ackEmpty(c *gin.Context) { c.Status(http.StatusOK) }
-
-// liveUnsignedWebhook reports a config that would accept unsigned
-// deliveries in live mode. The admin write path already refuses the
-// combination; this guard covers rows written before that rule, because
-// a live webhook that accepts an unsigned body is fail-open: anyone who
-// learns the URL could mark an order paid.
-func liveUnsignedWebhook(cfg *providercfg.ResolvedConfig) bool {
-	return cfg != nil && cfg.Mode == "live" &&
-		strings.EqualFold(strings.TrimSpace(cfg.WebhookAuthMode), "none")
-}
 
 // peekReference reads an order reference out of a payload that has not
 // been verified yet. It is used only to choose which product's config
@@ -149,29 +142,110 @@ func (h *PaymentsWebhookHandler) configFor(c *gin.Context, order *model.PaymentO
 	return h.Config.Resolve(c.Request.Context(), productID, providerName, "")
 }
 
-func (h *PaymentsWebhookHandler) findOrder(c *gin.Context, code string, numeric int64) *model.PaymentOrder {
+// findOrder looks an order up by the reference an unverified payload
+// names. It answers 500 and returns ok=false only for a read fault: a
+// lookup error must not be mistaken for "no such order", because that
+// would send a known delivery to the unmatched queue instead of letting
+// the provider retry a database problem.
+func (h *PaymentsWebhookHandler) findOrder(c *gin.Context, code string, numeric int64) (*model.PaymentOrder, bool) {
 	if code != "" {
-		if o, err := h.Store.GetPaymentOrderByCode(c.Request.Context(), code); err == nil {
-			return o
+		order, err := h.Store.GetPaymentOrderByCode(c.Request.Context(), code)
+		switch {
+		case err == nil:
+			return order, true
+		case !errors.Is(err, store.ErrOrderNotFound):
+			h.logger().Error("webhook: read order by code", "code", code, "error", err)
+			c.Status(http.StatusInternalServerError)
+			return nil, false
 		}
 	}
 	if numeric != 0 {
-		if o, err := h.Store.GetPaymentOrderByNumericCode(c.Request.Context(), numeric); err == nil {
-			return o
+		order, err := h.Store.GetPaymentOrderByNumericCode(c.Request.Context(), numeric)
+		switch {
+		case err == nil:
+			return order, true
+		case !errors.Is(err, store.ErrOrderNotFound):
+			h.logger().Error("webhook: read order by numeric code", "numeric_code", numeric, "error", err)
+			c.Status(http.StatusInternalServerError)
+			return nil, false
 		}
 	}
-	return nil
+	return nil, true
 }
 
 // verifiedOrder finds the order the (now verified) event names. The
 // pre-signature peek is only the fallback for an adapter that could not
 // extract a reference the handler's looser peek did; the amount and
-// currency check in settlement still guards the match.
-func (h *PaymentsWebhookHandler) verifiedOrder(c *gin.Context, ev provider.WebhookEvent, peeked *model.PaymentOrder) *model.PaymentOrder {
-	if o := h.findOrder(c, ev.OrderCode, ev.NumericCode); o != nil {
-		return o
+// currency check in settlement still guards the match. ok is false only
+// when the lookup faulted and a 500 has been written.
+func (h *PaymentsWebhookHandler) verifiedOrder(c *gin.Context, ev provider.WebhookEvent, peeked *model.PaymentOrder) (*model.PaymentOrder, bool) {
+	if ev.OrderCode == "" && ev.NumericCode == 0 {
+		return peeked, true
 	}
-	return peeked
+	order, ok := h.findOrder(c, ev.OrderCode, ev.NumericCode)
+	if !ok {
+		return nil, false
+	}
+	if order != nil {
+		return order, true
+	}
+	return peeked, true
+}
+
+// bindConfig proves the row that verified a delivery is the row the
+// order's product uses. The unverified peek chooses the secret, so a
+// signed body can name one product's order where the peek reads and
+// another where the adapter reads. Without this check, product A's
+// secret could settle product B's order via the install default, or a
+// product row could settle another product's order outright.
+func (h *PaymentsWebhookHandler) bindConfig(c *gin.Context, providerName string, order *model.PaymentOrder, cfg *providercfg.ResolvedConfig) bool {
+	if order == nil || cfg == nil {
+		return true
+	}
+	if !strings.EqualFold(cfg.Provider, providerName) {
+		h.rejectBinding(c, providerName, order, cfg, "provider mismatch")
+		return false
+	}
+	if cfg.ProductID == order.ProductID {
+		return true
+	}
+	if cfg.ProductID != "" {
+		h.rejectBinding(c, providerName, order, cfg, "another product's account verified the delivery")
+		return false
+	}
+	// The install default verified it. That is right only while the
+	// order's product has no row of its own; a product row must never be
+	// bypassed by a default-secret delivery.
+	if _, err := h.Config.Resolve(c.Request.Context(), order.ProductID, providerName, cfg.Mode); err == nil {
+		h.rejectBinding(c, providerName, order, cfg, "the install default verified a product that has its own account")
+		return false
+	} else if !errors.Is(err, providercfg.ErrProviderNotConfigured) {
+		// A disabled or unusable product row is not permission to fall
+		// back to the default either.
+		h.rejectBinding(c, providerName, order, cfg, "the order's product has an unusable account")
+		return false
+	}
+	return true
+}
+
+func (h *PaymentsWebhookHandler) rejectBinding(c *gin.Context, providerName string, order *model.PaymentOrder, cfg *providercfg.ResolvedConfig, reason string) {
+	h.logger().Error("webhook: verifying account does not match the order's product",
+		"provider", providerName, "order", order.Code,
+		"order_product", order.ProductID, "config_product", cfg.ProductID, "reason", reason)
+	c.Status(http.StatusForbidden)
+}
+
+// scopedEventID is the id a verified delivery is recorded under. Two
+// per-product accounts can see the same provider transfer id, so a
+// product's own row scopes the id to that account; the install default
+// keeps the provider's bare id. Scoping is applied to every delivery,
+// including out transfers and unknown orders, and before the duplicate
+// short-circuit.
+func scopedEventID(cfg *providercfg.ResolvedConfig, ev provider.WebhookEvent) string {
+	if cfg != nil && cfg.ProductID != "" {
+		return cfg.ProductID + ":" + ev.ProviderEventID
+	}
+	return ev.ProviderEventID
 }
 
 // parseStatus maps an adapter error to the answer the provider gets. An
@@ -194,16 +268,16 @@ func (h *PaymentsWebhookHandler) HandleSePay(c *gin.Context) {
 		return
 	}
 	code, numeric := peekReference(body)
-	peeked := h.findOrder(c, code, numeric)
-	cfg, err := h.configFor(c, peeked, "sepay")
-	if err != nil {
-		h.logger().Error("sepay webhook: no usable provider config", "error", err)
-		c.Status(http.StatusServiceUnavailable)
+	peeked, ok := h.findOrder(c, code, numeric)
+	if !ok {
 		return
 	}
-	if liveUnsignedWebhook(cfg) {
-		h.logger().Error("sepay webhook: webhook_auth_mode none is not allowed for a live config",
-			"product", cfg.ProductID)
+	cfg, err := h.configFor(c, peeked, "sepay")
+	if err != nil {
+		// That includes providercfg refusing a live row whose
+		// webhook_auth_mode is "none": the handler relies on Resolve for
+		// that rule and never parses an unsigned live body.
+		h.logger().Error("sepay webhook: no usable provider config", "error", err)
 		c.Status(http.StatusServiceUnavailable)
 		return
 	}
@@ -214,24 +288,16 @@ func (h *PaymentsWebhookHandler) HandleSePay(c *gin.Context) {
 		h.parseStatus(c, "sepay", err)
 		return
 	}
-	order := h.verifiedOrder(c, ev, peeked)
-	if ev.TransferType == "out" {
-		// A refund or payout: keep it on the unmatched ledger, never
-		// settle an order from money leaving the account.
-		if h.Settlement == nil {
-			h.logger().Error("sepay webhook: settlement is not configured")
-			c.Status(http.StatusServiceUnavailable)
-			return
-		}
-		if err := h.Settlement.RecordUnmatched(c.Request.Context(), "sepay", ev, order); err != nil {
-			h.logger().Error("sepay webhook: record out transfer", "error", err)
-			c.Status(http.StatusInternalServerError)
-			return
-		}
-		ackJSON(c)
+	order, ok := h.verifiedOrder(c, ev, peeked)
+	if !ok {
 		return
 	}
-	h.ingest(c, "sepay", ev, order, ackJSON)
+	if !h.bindConfig(c, "sepay", order, cfg) {
+		return
+	}
+	// A refund or payout keeps its audit row and unmatched transaction,
+	// but never settles an order from money leaving the account.
+	h.ingest(c, "sepay", cfg, ev, order, ev.TransferType != "out", ackJSON)
 }
 
 // HandleSePayIPN receives the SePay hosted-gateway IPN. It shares the
@@ -243,7 +309,10 @@ func (h *PaymentsWebhookHandler) HandleSePayIPN(c *gin.Context) {
 		return
 	}
 	code, numeric := peekReference(body)
-	peeked := h.findOrder(c, code, numeric)
+	peeked, ok := h.findOrder(c, code, numeric)
+	if !ok {
+		return
+	}
 	cfg, err := h.configFor(c, peeked, "sepay")
 	if err != nil {
 		h.logger().Error("sepay ipn: no usable provider config", "error", err)
@@ -255,7 +324,14 @@ func (h *PaymentsWebhookHandler) HandleSePayIPN(c *gin.Context) {
 		h.parseStatus(c, "sepay-ipn", err)
 		return
 	}
-	h.ingest(c, "sepay", ev, h.verifiedOrder(c, ev, peeked), ackEmpty)
+	order, ok := h.verifiedOrder(c, ev, peeked)
+	if !ok {
+		return
+	}
+	if !h.bindConfig(c, "sepay", order, cfg) {
+		return
+	}
+	h.ingest(c, "sepay", cfg, ev, order, true, ackEmpty)
 }
 
 // HandlePayOS receives a PayOS webhook. PayOS signs the data object, so
@@ -267,7 +343,10 @@ func (h *PaymentsWebhookHandler) HandlePayOS(c *gin.Context) {
 		return
 	}
 	code, numeric := peekReference(body)
-	peeked := h.findOrder(c, code, numeric)
+	peeked, ok := h.findOrder(c, code, numeric)
+	if !ok {
+		return
+	}
 	cfg, err := h.configFor(c, peeked, "payos")
 	if err != nil {
 		h.logger().Error("payos webhook: no usable provider config", "error", err)
@@ -279,33 +358,37 @@ func (h *PaymentsWebhookHandler) HandlePayOS(c *gin.Context) {
 		h.parseStatus(c, "payos", err)
 		return
 	}
-	h.ingest(c, "payos", ev, h.verifiedOrder(c, ev, peeked), ackJSON)
+	order, ok := h.verifiedOrder(c, ev, peeked)
+	if !ok {
+		return
+	}
+	if !h.bindConfig(c, "payos", order, cfg) {
+		return
+	}
+	h.ingest(c, "payos", cfg, ev, order, true, ackJSON)
 }
 
-// ingest is the one settlement entry point after verification.
-func (h *PaymentsWebhookHandler) ingest(c *gin.Context, providerName string, ev provider.WebhookEvent, order *model.PaymentOrder, ack func(*gin.Context)) {
+// ingest is the one audit and settlement entry point after
+// verification. Every verified delivery is recorded in payment_events
+// first, including the ones that will not settle (an unknown order, an
+// outgoing transfer), so the audit trail covers everything the provider
+// sent. The record is also the claim: a duplicate short-circuits to the
+// retry rule below.
+func (h *PaymentsWebhookHandler) ingest(
+	c *gin.Context, providerName string, cfg *providercfg.ResolvedConfig,
+	ev provider.WebhookEvent, order *model.PaymentOrder, settles bool, ack func(*gin.Context),
+) {
 	if h.Settlement == nil || h.Store == nil {
 		h.logger().Error("webhook: settlement is not configured", "provider", providerName)
 		c.Status(http.StatusServiceUnavailable)
 		return
 	}
-	// A webhook without a matching order is normal: a manual transfer
-	// with the code typed wrong. Record it for the operator instead of
-	// 500-looping the provider.
-	if order == nil {
-		if err := h.Settlement.RecordUnmatched(c.Request.Context(), providerName, ev, nil); err != nil {
-			h.logger().Error("webhook: record unmatched transaction", "provider", providerName, "error", err)
-			c.Status(http.StatusInternalServerError)
-			return
-		}
-		ack(c)
-		return
+	orderID := ""
+	if order != nil {
+		orderID = order.ID
 	}
-	// Claim the provider event before settling. A duplicate delivery
-	// (the provider's retry, two replicas, a replay) is acked without a
-	// second settlement.
 	inserted, err := h.Store.RecordPaymentEvent(c.Request.Context(), nil, store.PaymentEventInput{
-		Provider: providerName, EventID: ev.ProviderEventID, OrderID: order.ID,
+		Provider: providerName, EventID: scopedEventID(cfg, ev), OrderID: orderID,
 		Kind: ev.Status, Raw: ev.Raw, OccurredAt: ev.OccurredAt,
 	})
 	if err != nil {
@@ -321,18 +404,67 @@ func (h *PaymentsWebhookHandler) ingest(c *gin.Context, providerName string, ev 
 		return
 	}
 	if !inserted {
+		if !settles {
+			// A repeated out transfer or orderless delivery is already
+			// on the unmatched ledger; ack it and change nothing.
+			ack(c)
+			return
+		}
+		h.retryPendingSettlement(c, providerName, ev, order, ack)
+		return
+	}
+	// An unknown order is normal: a manual transfer with the code typed
+	// wrong. Record it for the operator instead of 500-looping the
+	// provider. An out transfer is recorded the same way and never
+	// settles an order.
+	if !settles || order == nil {
+		if err := h.Settlement.RecordUnmatched(c.Request.Context(), providerName, ev, order); err != nil {
+			h.logger().Error("webhook: record unmatched transaction", "provider", providerName, "error", err)
+			c.Status(http.StatusInternalServerError)
+			return
+		}
 		ack(c)
 		return
 	}
 	if err := h.Settlement.Settle(c.Request.Context(), order.ID, providerName, ev); err != nil {
-		// The claim was written before settlement; take it back so the
-		// provider's retry runs settlement again instead of being
-		// mistaken for a duplicate and acked unsettled.
-		if ferr := h.Store.ForgetPaymentEvent(c.Request.Context(), providerName, ev.ProviderEventID); ferr != nil {
-			h.logger().Error("webhook: release the payment event claim",
-				"provider", providerName, "event", ev.ProviderEventID, "error", ferr)
-		}
+		// The claim is kept on purpose: the provider's retry reaches the
+		// duplicate path, which settles the order again once the cause
+		// is fixed.
 		h.logger().Error("webhook: settle order", "order", order.Code, "error", err)
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	ack(c)
+}
+
+// retryPendingSettlement is the duplicate rule. A claim can exist while
+// its order is still pending when the process died between the claim and
+// settlement, or a request context was cancelled mid-settlement; the
+// redelivery must settle rather than be acked as already handled.
+// Settlement is idempotent, so an order that a concurrent delivery
+// settled in the meantime is a no-op. A terminal order is only acked:
+// its first delivery is the one that decided it.
+func (h *PaymentsWebhookHandler) retryPendingSettlement(c *gin.Context, providerName string, ev provider.WebhookEvent, order *model.PaymentOrder, ack func(*gin.Context)) {
+	if order == nil {
+		ack(c)
+		return
+	}
+	current, err := h.Store.GetPaymentOrderForUpdate(c.Request.Context(), nil, order.ID)
+	if errors.Is(err, store.ErrOrderNotFound) {
+		ack(c)
+		return
+	}
+	if err != nil {
+		h.logger().Error("webhook: reload order for a duplicate delivery", "order", order.Code, "error", err)
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	if current.Status != domain.OrderPending {
+		ack(c)
+		return
+	}
+	if err := h.Settlement.Settle(c.Request.Context(), current.ID, providerName, ev); err != nil {
+		h.logger().Error("webhook: settle pending order on a duplicate delivery", "order", order.Code, "error", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}

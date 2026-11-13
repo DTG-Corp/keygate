@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/tabloy/keygate/internal/middleware"
 	"github.com/tabloy/keygate/internal/model"
 	"github.com/tabloy/keygate/internal/payment/domain"
 	"github.com/tabloy/keygate/internal/payment/providercfg"
@@ -138,6 +140,43 @@ func (fx *webhookFixture) deliveryCount(t *testing.T, event string) int {
 	return fx.count(t, "SELECT count(*) FROM webhook_deliveries WHERE webhook_id = ? AND event = ?", fx.webhookID, event)
 }
 
+// eventIDFor is the account-scoped event key the handler records: a
+// product's own row scopes the provider event id, the install default
+// keeps it bare.
+func eventIDFor(productID string, id int64) string {
+	if productID == "" {
+		return strconv.FormatInt(id, 10)
+	}
+	return productID + ":" + strconv.FormatInt(id, 10)
+}
+
+// addSepayProduct adds a live SePay row for one product with its own
+// webhook secret, so a test can hold two accounts in one install.
+func (fx *webhookFixture) addSepayProduct(t *testing.T, productID, secret string) {
+	t.Helper()
+	if _, err := fx.config.Upsert(fx.ctx, providercfg.UpsertInput{
+		Provider: "sepay", ProductID: productID, Mode: "live", Enabled: true,
+		Config: providercfg.SepayConfig{
+			BankName: "MB Bank", BankCode: "MB", BankBIN: "970422",
+			AccountNo: "0978482700", AccountName: "NGUYEN VAN A", WebhookAuthMode: "hmac",
+		},
+		Credentials:   providercfg.SepayCredentials{APIToken: "token-" + productID},
+		WebhookSecret: secret,
+	}); err != nil {
+		t.Fatalf("upsert sepay row for product %s: %v", productID, err)
+	}
+}
+
+// sepaySplitBody names one order where the handler's unverified peek
+// reads a code (data.description) and another where the SePay adapter
+// reads one (content). The full exploit is a body like this signed with
+// the first product's secret: verification succeeds against that
+// account, while settlement follows the second code.
+func sepaySplitBody(peekCode, adapterCode string, id int64) []byte {
+	return fmt.Appendf(nil, `{"id":%d,"gateway":"MB","transactionDate":"2026-11-12 15:04:05","accountNumber":"0978482700","subAccount":"","content":%q,"transferType":"in","description":"x","transferAmount":1190000,"accumulated":0,"referenceCode":"FT%d","data":{"description":%q}}`,
+		id, adapterCode+" chuyen tien", id, peekCode)
+}
+
 // newSePayEventID returns an id no earlier test run has recorded: both
 // payment_events and payment_transactions dedupe on it, and the
 // integration database outlives one run.
@@ -208,7 +247,7 @@ func TestSePayWebhookAcksAndSettlesOnce(t *testing.T) {
 	}
 	// The event claim survives exactly once and the transfer is on the
 	// ledger as matched.
-	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'sepay' AND event_id = ?", strconv.FormatInt(eventID, 10)); n != 1 {
+	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'sepay' AND event_id = ?", eventIDFor(fx.prodA.ID, eventID)); n != 1 {
 		t.Fatalf("payment_events rows = %d, want 1", n)
 	}
 	if n := fx.count(t, "SELECT count(*) FROM payment_transactions WHERE provider = 'sepay' AND provider_ref = ? AND status = ?",
@@ -290,15 +329,80 @@ func TestSePayWebhookOversizedBodyIs413(t *testing.T) {
 	}
 }
 
+// The cap is the spec's 256 KiB, enforced on the real route shape: the
+// BodyLimit middleware refuses a declared oversized length, and a body
+// that arrives without a length stops at the middleware's reader and the
+// handler answers 400 instead of buffering it.
+func TestSePayWebhookBodyLimitThroughRouter(t *testing.T) {
+	if maxWebhookBody != 256<<10 {
+		t.Fatalf("maxWebhookBody = %d, want 256 KiB (spec §7)", maxWebhookBody)
+	}
+	fx := newSepayWebhookFixture(t)
+	router := gin.New()
+	router.Use(middleware.BodyLimit(maxWebhookBody))
+	router.POST("/api/v1/webhook/sepay", fx.handler.HandleSePay)
+
+	oversized := append([]byte(`{"id":1,"pad":"`), bytes.Repeat([]byte("a"), maxWebhookBody)...)
+	oversized = append(oversized, []byte(`"}`)...)
+
+	t.Run("declared content length", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/webhook/sepay", bytes.NewReader(oversized))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("status = %d, want 413: %s", w.Code, w.Body.String())
+		}
+	})
+	t.Run("streamed body", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/webhook/sepay", bytes.NewReader(oversized))
+		req.ContentLength = -1
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+// A database fault during the order lookup answers 500, not "no such
+// order": classifying a known delivery as unmatched would hide the fault
+// and give up the provider's retry.
+func TestSePayWebhookOrderLookupErrorIs500(t *testing.T) {
+	fx := newSepayWebhookFixture(t)
+	order := fx.newOrder(t, "new", "sepay")
+	body := sepayBankBody(order.Code, newSePayEventID(), "in")
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	mac := hmac.New(sha256.New, []byte(fx.secret))
+	_, _ = mac.Write([]byte(ts + "." + string(body)))
+
+	ctx, cancel := context.WithCancel(fx.ctx)
+	cancel()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/webhook/sepay", bytes.NewReader(body)).WithContext(ctx)
+	c.Request.Header.Set("X-SePay-Timestamp", ts)
+	c.Request.Header.Set("X-SePay-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	fx.handler.HandleSePay(c)
+	w.Code = c.Writer.Status()
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500: %s", w.Code, w.Body.String())
+	}
+	if n := fx.count(t, "SELECT count(*) FROM payment_transactions WHERE order_id = ?", order.ID); n != 0 {
+		t.Fatalf("transactions written after a read fault: %d", n)
+	}
+}
+
 // A transfer whose memo names no order is normal (a manual transfer with
 // the code typed wrong). It is acked and kept for the operator, not
-// 500-looped back to SePay.
+// 500-looped back to SePay. The verified delivery is still an audit row
+// (§7.3), and its redelivery changes nothing.
 func TestSePayWebhookUnknownOrderAcksAndRecordsUnmatched(t *testing.T) {
 	fx := newSepayWebhookFixture(t)
 	code := domain.NewOrderCode()
 	eventID := newSePayEventID()
+	body := sepayBankBody(code, eventID, "in")
 
-	w := fx.postSePay(t, sepayBankBody(code, eventID, "in"), fx.secret)
+	w := fx.postSePay(t, body, fx.secret)
 	if w.Code != http.StatusOK || w.Body.String() != `{"success":true}` {
 		t.Fatalf("ack = %d %q", w.Code, w.Body.String())
 	}
@@ -310,8 +414,21 @@ func TestSePayWebhookUnknownOrderAcksAndRecordsUnmatched(t *testing.T) {
 		strconv.FormatInt(eventID, 10)); n != 1 {
 		t.Fatalf("unmatched transaction should name no order")
 	}
-	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'sepay' AND event_id = ?", strconv.FormatInt(eventID, 10)); n != 0 {
-		t.Fatalf("payment_events rows = %d, want 0 for an orderless event", n)
+	// The default config verifies an orderless transfer, so the audit
+	// row keeps the bare provider id (no account scope).
+	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'sepay' AND event_id = ? AND order_id IS NULL",
+		strconv.FormatInt(eventID, 10)); n != 1 {
+		t.Fatalf("payment_events rows = %d, want 1 for an orderless event", n)
+	}
+
+	if retry := fx.postSePay(t, body, fx.secret); retry.Code != http.StatusOK {
+		t.Fatalf("retry ack = %d: %s", retry.Code, retry.Body.String())
+	}
+	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'sepay' AND event_id = ?", strconv.FormatInt(eventID, 10)); n != 1 {
+		t.Fatalf("payment_events rows after retry = %d, want 1", n)
+	}
+	if n := fx.count(t, "SELECT count(*) FROM payment_transactions WHERE provider = 'sepay' AND provider_ref = ?", strconv.FormatInt(eventID, 10)); n != 1 {
+		t.Fatalf("transactions after retry = %d, want 1", n)
 	}
 }
 
@@ -342,6 +459,23 @@ func TestSePayWebhookOutTransferIsRecordedNotSettled(t *testing.T) {
 	}
 	if n := fx.deliveryCount(t, model.EventPaymentSucceeded) + fx.deliveryCount(t, model.EventOrderPaid); n != 0 {
 		t.Fatalf("events emitted for an out transfer: %d", n)
+	}
+	// The out transfer is a verified delivery too: it belongs in the
+	// audit trail, scoped to the account that signed it.
+	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'sepay' AND event_id = ? AND order_id = ?",
+		eventIDFor(fx.prodA.ID, eventID), order.ID); n != 1 {
+		t.Fatalf("out transfer audit rows = %d, want 1", n)
+	}
+
+	retry := fx.postSePay(t, sepayBankBody(order.Code, eventID, "out"), fx.secret)
+	if retry.Code != http.StatusOK {
+		t.Fatalf("out retry ack = %d: %s", retry.Code, retry.Body.String())
+	}
+	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'sepay' AND event_id = ?", eventIDFor(fx.prodA.ID, eventID)); n != 1 {
+		t.Fatalf("out audit rows after retry = %d, want 1", n)
+	}
+	if n := fx.count(t, "SELECT count(*) FROM payment_transactions WHERE provider = 'sepay' AND provider_ref = ?", strconv.FormatInt(eventID, 10)); n != 1 {
+		t.Fatalf("out transactions after retry = %d, want 1", n)
 	}
 }
 
@@ -382,42 +516,107 @@ func TestSePayWebhookPaymentOnClosedOrderOnlyRecordsTransaction(t *testing.T) {
 	}
 }
 
-// A settlement failure answers 500 so the provider retries. The event
-// claim must be released, otherwise the retry would be mistaken for a
-// duplicate and acked while the order stays unsettled.
-func TestSePayWebhookFailedSettlementReleasesEventClaim(t *testing.T) {
+// A claim can exist while its order is still pending: the process died
+// between the claim and settlement, or the request context was canceled
+// mid-settlement. The redelivery must settle the pending order rather
+// than ack it as already handled.
+func TestSePayWebhookDuplicateClaimForPendingOrderSettles(t *testing.T) {
 	fx := newSepayWebhookFixture(t)
-	// "upgrade" has no settlement path in phase 1a: Settle refuses it
-	// without granting anything.
-	order := fx.newOrder(t, "upgrade", "sepay")
+	order := fx.newOrder(t, "new", "sepay")
 	eventID := newSePayEventID()
 	body := sepayBankBody(order.Code, eventID, "in")
+	key := eventIDFor(fx.prodA.ID, eventID)
+	// Exactly the row a crash after the claim and before settlement
+	// leaves behind.
+	if _, err := fx.s.RecordPaymentEvent(fx.ctx, nil, store.PaymentEventInput{
+		Provider: "sepay", EventID: key, OrderID: order.ID,
+		Kind: domain.OrderPaid, Raw: body, OccurredAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("seed event claim: %v", err)
+	}
 
-	if w := fx.postSePay(t, body, fx.secret); w.Code != http.StatusInternalServerError {
-		t.Fatalf("failed settle = %d, want 500: %s", w.Code, w.Body.String())
-	}
-	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'sepay' AND event_id = ?", strconv.FormatInt(eventID, 10)); n != 0 {
-		t.Fatalf("payment_events rows after a failed settle = %d, want 0", n)
-	}
-	// The retry runs settlement again instead of being acked as a
-	// duplicate.
-	if w := fx.postSePay(t, body, fx.secret); w.Code != http.StatusInternalServerError {
-		t.Fatalf("retry after failed settle = %d, want 500", w.Code)
+	w := fx.postSePay(t, body, fx.secret)
+	if w.Code != http.StatusOK {
+		t.Fatalf("duplicate claim delivery = %d: %s", w.Code, w.Body.String())
 	}
 	got, err := fx.s.GetPaymentOrderByCode(fx.ctx, order.Code)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != domain.OrderPending {
-		t.Fatalf("order status = %q, want pending", got.Status)
+	if got.Status != domain.OrderPaid || got.PaidAt == nil {
+		t.Fatalf("order = status %q paid_at %v, want paid", got.Status, got.PaidAt)
+	}
+	if n := fx.count(t, "SELECT count(*) FROM licenses WHERE email = ?", order.Email); n != 1 {
+		t.Fatalf("licences = %d, want 1", n)
+	}
+	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'sepay' AND event_id = ?", key); n != 1 {
+		t.Fatalf("payment_events rows = %d, want 1", n)
+	}
+	if n := fx.deliveryCount(t, model.EventPaymentSucceeded); n != 1 {
+		t.Fatalf("payment.succeeded deliveries = %d, want 1", n)
 	}
 }
 
-// A live config may never accept unsigned deliveries. The write path
-// refuses the combination, so the row is inserted directly to prove the
-// runtime guard still answers 503 (and parses nothing) when such a row
-// exists from before the validation.
-func TestSePayWebhookLiveNoneAuthIs503(t *testing.T) {
+// A failed settlement answers 500 and keeps the claim. The provider's
+// retry then sees a duplicate for a still-pending order, settles it, and
+// answers 200: one licence, one event row, one emission.
+func TestSePayWebhookFailedSettlementRetriedOnDuplicate(t *testing.T) {
+	fx := newSepayWebhookFixture(t)
+	order := fx.newOrder(t, "new", "sepay")
+	eventID := newSePayEventID()
+	body := sepayBankBody(order.Code, eventID, "in")
+	key := eventIDFor(fx.prodA.ID, eventID)
+
+	// An inactive plan makes the grant fail without breaking the
+	// database, so the test can fix the cause and retry.
+	if _, err := fx.s.DB.NewRaw("UPDATE plans SET active = false WHERE id = ?", order.PlanID).Exec(fx.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if w := fx.postSePay(t, body, fx.secret); w.Code != http.StatusInternalServerError {
+		t.Fatalf("failed settle = %d, want 500: %s", w.Code, w.Body.String())
+	}
+	// The claim stays: the retry path, not a release, is what makes the
+	// redelivery settle.
+	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'sepay' AND event_id = ?", key); n != 1 {
+		t.Fatalf("payment_events rows after a failed settle = %d, want 1 (claim kept)", n)
+	}
+	if n := fx.count(t, "SELECT count(*) FROM licenses WHERE email = ?", order.Email); n != 0 {
+		t.Fatalf("licences after a failed settle = %d, want 0", n)
+	}
+
+	if _, err := fx.s.DB.NewRaw("UPDATE plans SET active = true WHERE id = ?", order.PlanID).Exec(fx.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if w := fx.postSePay(t, body, fx.secret); w.Code != http.StatusOK {
+		t.Fatalf("retry after fixed cause = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	got, err := fx.s.GetPaymentOrderByCode(fx.ctx, order.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.OrderPaid {
+		t.Fatalf("order status = %q, want paid", got.Status)
+	}
+	if n := fx.count(t, "SELECT count(*) FROM licenses WHERE email = ?", order.Email); n != 1 {
+		t.Fatalf("licences = %d, want 1", n)
+	}
+	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'sepay' AND event_id = ?", key); n != 1 {
+		t.Fatalf("payment_events rows after retry = %d, want 1 (no duplicate audit row)", n)
+	}
+	if n := fx.deliveryCount(t, model.EventPaymentSucceeded); n != 1 {
+		t.Fatalf("payment.succeeded deliveries = %d, want 1", n)
+	}
+	if n := fx.deliveryCount(t, model.EventOrderPaid); n != 1 {
+		t.Fatalf("order.paid deliveries = %d, want 1", n)
+	}
+}
+
+// providercfg rejects a live row whose webhook_auth_mode is "none" at
+// write time (there is no handler-side guard: the handler relies on
+// Resolve refusing such a row). This seeds the row directly to prove the
+// runtime still fails closed, parses nothing and never treats a live
+// unsigned body as payment.
+func TestSePayWebhookLiveNoneConfigIsRefused(t *testing.T) {
 	fx := newSepayWebhookFixture(t)
 	// Product B has no provider row yet, so this creates rather than
 	// updates the slot (an update would keep the old id and the
@@ -463,23 +662,109 @@ func TestSePayWebhookLiveNoneAuthIs503(t *testing.T) {
 	}
 }
 
-func TestLiveNoneWebhookGuard(t *testing.T) {
-	cases := []struct {
-		name string
-		cfg  *providercfg.ResolvedConfig
-		want bool
-	}{
-		{"live none", &providercfg.ResolvedConfig{Mode: "live", WebhookAuthMode: "none"}, true},
-		{"live NONE", &providercfg.ResolvedConfig{Mode: "live", WebhookAuthMode: " NONE "}, true},
-		{"live hmac", &providercfg.ResolvedConfig{Mode: "live", WebhookAuthMode: "hmac"}, false},
-		{"live apikey", &providercfg.ResolvedConfig{Mode: "live", WebhookAuthMode: "apikey"}, false},
-		{"test none", &providercfg.ResolvedConfig{Mode: "test", WebhookAuthMode: "none"}, false},
-		{"nil config", nil, false},
+// assertRejectedDeliveryLeavesOrderPending checks a refused delivery had
+// no effect: the order is still pending, with no licence, no transfer
+// and no audit row.
+func assertRejectedDeliveryLeavesOrderPending(t *testing.T, fx *webhookFixture, order *model.PaymentOrder) {
+	t.Helper()
+	got, err := fx.s.GetPaymentOrderByCode(fx.ctx, order.Code)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
+	if got.Status != domain.OrderPending {
+		t.Fatalf("order status = %q, want pending", got.Status)
+	}
+	if n := fx.count(t, "SELECT count(*) FROM licenses WHERE email = ?", order.Email); n != 0 {
+		t.Fatalf("licences = %d, want 0", n)
+	}
+	if n := fx.count(t, "SELECT count(*) FROM payment_transactions WHERE provider = 'sepay' AND order_id = ?", order.ID); n != 0 {
+		t.Fatalf("transactions = %d, want 0", n)
+	}
+	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'sepay' AND order_id = ?", order.ID); n != 0 {
+		t.Fatalf("audit rows = %d, want 0", n)
+	}
+}
+
+// The unverified peek chooses which product's secret verifies a
+// delivery, so the verified order must belong to that same account.
+// Otherwise a body can name product A where the peek reads (spending
+// A's secret) and product B where the SePay adapter reads (settling B's
+// order).
+func TestSePayWebhookVerifiedOrderMustMatchVerifyingAccount(t *testing.T) {
+	const productBSecret = "whsec_product_b"
+
+	t.Run("signed body names another product's order", func(t *testing.T) {
+		fx := newSepayWebhookFixture(t)
+		fx.addSepayProduct(t, fx.prodB.ID, productBSecret)
+		orderA := fx.newOrderOn(t, fx.prodA.ID, fx.planA.ID, "new", "sepay")
+		orderB := fx.newOrderOn(t, fx.prodB.ID, fx.planB.ID, "new", "sepay")
+		body := sepaySplitBody(orderA.Code, orderB.Code, newSePayEventID())
+
+		// A's secret verifies because the peek reads data.description.
+		w := fx.postSePay(t, body, fx.secret)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("cross-product delivery = %d, want 403: %s", w.Code, w.Body.String())
+		}
+		assertRejectedDeliveryLeavesOrderPending(t, fx, orderB)
+	})
+
+	t.Run("default config used for a product that has its own", func(t *testing.T) {
+		fx := newSepayWebhookFixture(t)
+		fx.addSepayProduct(t, fx.prodB.ID, productBSecret)
+		orderB := fx.newOrderOn(t, fx.prodB.ID, fx.planB.ID, "new", "sepay")
+		// A valid code that names no order makes the peek fall back to
+		// the install default; the adapter still reads B's code out of
+		// content, and the default must not settle B's order.
+		body := sepaySplitBody(domain.NewOrderCode(), orderB.Code, newSePayEventID())
+
+		w := fx.postSePay(t, body, fx.secret) // the default row's secret
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("default-config delivery = %d, want 403: %s", w.Code, w.Body.String())
+		}
+		assertRejectedDeliveryLeavesOrderPending(t, fx, orderB)
+	})
+}
+
+// Two per-product SePay accounts can see the same bank transfer id. The
+// event key is scoped to the account, so the second account's genuine
+// delivery is not mistaken for a duplicate of the first and both orders
+// settle.
+func TestSePayWebhookSameEventIDTwoAccountsBothSettle(t *testing.T) {
+	const productBSecret = "whsec_product_b"
+	fx := newSepayWebhookFixture(t)
+	fx.addSepayProduct(t, fx.prodB.ID, productBSecret)
+	orderA := fx.newOrderOn(t, fx.prodA.ID, fx.planA.ID, "new", "sepay")
+	orderB := fx.newOrderOn(t, fx.prodB.ID, fx.planB.ID, "new", "sepay")
+	eventID := newSePayEventID()
+
+	if w := fx.postSePay(t, sepayBankBody(orderA.Code, eventID, "in"), fx.secret); w.Code != http.StatusOK {
+		t.Fatalf("account A delivery = %d: %s", w.Code, w.Body.String())
+	}
+	if w := fx.postSePay(t, sepayBankBody(orderB.Code, eventID, "in"), productBSecret); w.Code != http.StatusOK {
+		t.Fatalf("account B delivery = %d: %s", w.Code, w.Body.String())
+	}
+
+	for _, tc := range []struct {
+		name      string
+		order     *model.PaymentOrder
+		productID string
+	}{
+		{"product A", orderA, fx.prodA.ID},
+		{"product B", orderB, fx.prodB.ID},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := liveUnsignedWebhook(tc.cfg); got != tc.want {
-				t.Fatalf("liveUnsignedWebhook(%+v) = %t, want %t", tc.cfg, got, tc.want)
+			got, err := fx.s.GetPaymentOrderByCode(fx.ctx, tc.order.Code)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != domain.OrderPaid {
+				t.Fatalf("order status = %q, want paid", got.Status)
+			}
+			if n := fx.count(t, "SELECT count(*) FROM licenses WHERE email = ?", tc.order.Email); n != 1 {
+				t.Fatalf("licences = %d, want 1", n)
+			}
+			if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'sepay' AND event_id = ?", eventIDFor(tc.productID, eventID)); n != 1 {
+				t.Fatalf("audit rows for %s = %d, want 1", eventIDFor(tc.productID, eventID), n)
 			}
 		})
 	}
@@ -576,7 +861,7 @@ func TestPayOSWebhookVerifiesChecksumAndSettles(t *testing.T) {
 	if n := fx.count(t, "SELECT count(*) FROM licenses WHERE email = ?", order.Email); n != 1 {
 		t.Fatalf("licences = %d, want 1", n)
 	}
-	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'payos' AND event_id = ?", reference); n != 1 {
+	if n := fx.count(t, "SELECT count(*) FROM payment_events WHERE provider = 'payos' AND event_id = ?", fx.prodA.ID+":"+reference); n != 1 {
 		t.Fatalf("payos payment_events rows = %d, want 1", n)
 	}
 

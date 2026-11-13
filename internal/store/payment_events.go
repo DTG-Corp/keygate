@@ -32,14 +32,16 @@ type PaymentEventInput struct {
 // RecordPaymentEvent inserts the provider event id once. A duplicate —
 // the provider's retry, two replicas receiving one delivery, or a
 // replay after a partial settlement — answers inserted=false with no
-// error, and the caller acks without settling again. The unique key is
-// (provider, event_id); an empty event id would dedupe every anonymous
-// delivery into one row, so it is refused.
+// error. The unique key is (provider, event_id); an empty event id would
+// dedupe every anonymous delivery into one row, so it is refused.
 //
-// tx is the caller's transaction when there is one: the handler records
-// the event before settling, and a settlement that fails must take the
-// record back so the retry can run. bun.IDB is the parameter type rather
-// than bun.Tx because bun.Tx is a struct here and cannot be nil.
+// The claim is kept when settlement fails: the webhook handler treats a
+// duplicate whose order is still pending as a retry, so the next
+// delivery settles without needing the claim removed.
+//
+// tx is the caller's transaction when there is one. bun.IDB is the
+// parameter type rather than bun.Tx because bun.Tx is a struct here and
+// cannot be nil.
 func (s *Store) RecordPaymentEvent(ctx context.Context, tx bun.IDB, in PaymentEventInput) (bool, error) {
 	if in.EventID == "" {
 		return false, fmt.Errorf("%w: provider event id is required", ErrPaymentEventInvalid)
@@ -76,18 +78,4 @@ func (s *Store) RecordPaymentEvent(ctx context.Context, tx bun.IDB, in PaymentEv
 		return false, err
 	}
 	return n == 1, nil
-}
-
-// ForgetPaymentEvent removes one recorded event. The webhook handler
-// records the event before settling so a duplicate cannot grant twice;
-// when settlement then fails, it calls this so the provider's 500-retry
-// can claim the event again instead of being answered with a duplicate
-// ack for an order that never settled.
-func (s *Store) ForgetPaymentEvent(ctx context.Context, providerName, eventID string) error {
-	if eventID == "" {
-		return fmt.Errorf("%w: provider event id is required", ErrPaymentEventInvalid)
-	}
-	_, err := s.DB.NewDelete().Model((*model.PaymentEvent)(nil)).
-		Where("provider = ?", providerName).Where("event_id = ?", eventID).Exec(ctx)
-	return err
 }
