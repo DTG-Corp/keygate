@@ -17,6 +17,12 @@ import (
 var (
 	ErrPriceNotConfigured = errors.New("plan price not configured")
 	ErrPriceInvalid       = errors.New("plan price invalid")
+	// ErrPriceSlotConflict means another writer put an active row in the
+	// same (plan, provider, currency, interval) slot between this
+	// upsert's deactivate and its insert, so the partial unique index
+	// rejected the insert. The caller can read and retry; it is not an
+	// internal failure.
+	ErrPriceSlotConflict = errors.New("plan price slot conflict")
 )
 
 type PlanPriceInput struct {
@@ -63,12 +69,25 @@ func (in *PlanPriceInput) normalize() error {
 // (plan, provider, currency, interval) slot. The old row is deactivated,
 // not deleted: payment_orders references it, and an order's price
 // snapshot must stay readable after a price change.
+//
+// A plan sells one billing cycle, so in.BillingInterval is optional: an
+// empty interval means the plan's own, and a different one is refused.
+// Checkout resolves the plan's interval, so a row in any other slot
+// would be stored and never sellable.
 func (s *Store) UpsertPlanPrice(ctx context.Context, planID string, in PlanPriceInput) (*model.PlanPrice, error) {
 	if err := in.normalize(); err != nil {
 		return nil, err
 	}
-	if _, err := s.FindPlanByID(ctx, planID); err != nil {
+	plan, err := s.FindPlanByID(ctx, planID)
+	if err != nil {
 		return nil, err
+	}
+	planInterval := strings.ToLower(strings.TrimSpace(plan.BillingInterval))
+	switch {
+	case in.BillingInterval == "":
+		in.BillingInterval = planInterval
+	case in.BillingInterval != planInterval:
+		return nil, fmt.Errorf("%w: billing_interval %q does not match the plan's %q", ErrPriceInvalid, in.BillingInterval, planInterval)
 	}
 	row := &model.PlanPrice{
 		ID: NewID(), PlanID: planID, Provider: in.Provider, Currency: in.Currency,
@@ -76,7 +95,7 @@ func (s *Store) UpsertPlanPrice(ctx context.Context, planID string, in PlanPrice
 		BillingInterval: in.BillingInterval, ExternalPriceID: in.ExternalPriceID,
 		Active: true, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
-	err := RunInTx(ctx, s.DB, func(ctx context.Context, tx bun.Tx) error {
+	err = RunInTx(ctx, s.DB, func(ctx context.Context, tx bun.Tx) error {
 		_, err := tx.NewUpdate().Model((*model.PlanPrice)(nil)).
 			Set("active = ?", false).Set("updated_at = ?", time.Now()).
 			Where("plan_id = ?", planID).
@@ -92,6 +111,12 @@ func (s *Store) UpsertPlanPrice(ctx context.Context, planID string, in PlanPrice
 		return err
 	})
 	if err != nil {
+		// The deactivate above and this insert are one transaction, but
+		// two concurrent upserts can both pass the deactivate before
+		// either inserts; the partial unique index then rejects one.
+		if IsUniqueViolation(err) {
+			return nil, ErrPriceSlotConflict
+		}
 		return nil, err
 	}
 	return row, nil
@@ -114,7 +139,10 @@ func (s *Store) ListActivePlanPrices(ctx context.Context, planIDs []string) (map
 	if err := s.DB.NewSelect().Model(&rows).
 		Where("plan_id IN (?)", bun.In(planIDs)).
 		Where("active").
-		Order("plan_id ASC", "provider ASC", "currency ASC").
+		// Deterministic: the public handler's legacy flat price uses the
+		// first row of a plan, so the order must not depend on physical
+		// storage or the planner.
+		Order("plan_id ASC", "billing_interval ASC", "provider ASC", "currency ASC", "created_at DESC").
 		Scan(ctx); err != nil {
 		return nil, err
 	}
@@ -125,10 +153,9 @@ func (s *Store) ListActivePlanPrices(ctx context.Context, planIDs []string) (map
 }
 
 func (s *Store) DeactivatePlanPrice(ctx context.Context, planID, priceID string) error {
-	_, err := s.DB.NewUpdate().Model((*model.PlanPrice)(nil)).
+	return deletedOne(s.DB.NewUpdate().Model((*model.PlanPrice)(nil)).
 		Set("active = ?", false).Set("updated_at = ?", time.Now()).
-		Where("id = ?", priceID).Where("plan_id = ?", planID).Exec(ctx)
-	return err
+		Where("id = ?", priceID).Where("plan_id = ?", planID).Exec(ctx))
 }
 
 func (s *Store) ResolvePlanPrice(ctx context.Context, planID, provider, currency, billingInterval string) (*model.PlanPrice, error) {

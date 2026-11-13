@@ -20,8 +20,9 @@ import (
 // buy.
 //
 // Prices are read from plan_prices only: Stripe is not consulted in this
-// phase. A plan with no active local price is not sellable, so it is
-// omitted from the response rather than listed with a null price.
+// phase. A plan with no active local price is not sellable and is omitted
+// from the response; the exception is an active self-signup plan, whose
+// whole point is being free, so it stays listed with a null price.
 type PublicPlansHandler struct {
 	Store *store.Store
 	Log   *slog.Logger
@@ -79,9 +80,10 @@ func (h *PublicPlansHandler) List(c *gin.Context) {
 			continue
 		}
 		rows := prices[p.ID]
-		if len(rows) == 0 {
-			// Not purchasable: hidden from the pricing response, with
-			// no legacy stripe_price_id fallback.
+		if len(rows) == 0 && !p.SelfSignup {
+			// No local price and no free sign-up: not purchasable, so
+			// hidden from the pricing response, with no legacy
+			// stripe_price_id fallback.
 			continue
 		}
 		out := gin.H{
@@ -91,8 +93,9 @@ func (h *PublicPlansHandler) List(c *gin.Context) {
 			"prices":      publicPlanPrices(rows),
 			// True when /pay/<checkout_id> leads to the free sign-up
 			// form rather than a checkout, so a pricing page can label
-			// the button.
-			"self_signup": p.SelfSignup && p.StripePriceID == "",
+			// the button. The model column is the source of truth:
+			// plans.stripe_price_id is a retired Stripe-era field.
+			"self_signup": p.SelfSignup,
 			// A plan sold per seat: price is per seat, and the buyer
 			// picks between min_quantity and max_quantity at checkout
 			// (/pay/<checkout_id>?quantity=N presets it).
@@ -103,15 +106,20 @@ func (h *PublicPlansHandler) List(c *gin.Context) {
 		}
 		// The legacy top-level fields reflect the price for the plan's
 		// own interval, so clients written against the old shape keep
-		// working while they migrate to prices[].
-		display := rows[0]
-		for _, r := range rows {
-			if r.BillingInterval == p.BillingInterval {
-				display = r
-				break
+		// working while they migrate to prices[]. A free self-signup
+		// plan has no rows by design and carries null here.
+		if len(rows) > 0 {
+			display := rows[0]
+			for _, r := range rows {
+				if r.BillingInterval == p.BillingInterval {
+					display = r
+					break
+				}
 			}
+			out["price"], out["currency"] = display.AmountMinor, display.Currency
+		} else {
+			out["price"], out["currency"] = nil, nil
 		}
-		out["price"], out["currency"] = display.AmountMinor, display.Currency
 		active = append(active, out)
 	}
 
