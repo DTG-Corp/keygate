@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/tabloy/keygate/internal/payment/provider"
@@ -46,6 +47,12 @@ func (p *Provider) Name() string { return "sepay" }
 // CreateAttempt produces the static QR instruction. No provider call is
 // made: the bank webhook is the settlement source.
 func (p *Provider) CreateAttempt(_ context.Context, req provider.CreateAttemptRequest) (provider.CreateAttemptResult, error) {
+	// A row without the account number or the short bank code would render
+	// "?bank=&amount=…": a QR no banking app can pay. Fail closed instead
+	// of returning an instruction the buyer cannot settle.
+	if strings.TrimSpace(p.cfg.Bank.AccountNo) == "" || strings.TrimSpace(p.cfg.BankCode) == "" {
+		return provider.CreateAttemptResult{}, ErrMissingBankConfig
+	}
 	desc := req.OrderCode
 	return provider.CreateAttemptResult{
 		ProviderRef: req.OrderCode,
@@ -86,3 +93,7 @@ var _ provider.Provider = (*Provider)(nil)
 
 // ErrMissingAPIKey keeps a bad config from surfacing as an opaque 401.
 var ErrMissingAPIKey = errors.New("sepay: api token is not configured")
+
+// ErrMissingBankConfig means the resolved row has no account number or no
+// short bank code, so the static QR would encode an unpayable transfer.
+var ErrMissingBankConfig = errors.New("sepay: bank account is not configured")

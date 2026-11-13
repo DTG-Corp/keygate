@@ -32,7 +32,7 @@ func TestResolveProductOverrideWins(t *testing.T) {
 	// Install default for sepay.
 	if _, err := svc.Upsert(ctx, providercfg.UpsertInput{
 		Provider: "sepay", Mode: "live", Enabled: true,
-		Config:        providercfg.SepayConfig{BankName: "MB Bank", BankBIN: "970422", AccountNo: "0978482700", AccountName: "NGUYEN VAN A"},
+		Config:        providercfg.SepayConfig{BankName: "MB Bank", BankCode: "MB", BankBIN: "970422", AccountNo: "0978482700", AccountName: "NGUYEN VAN A"},
 		Credentials:   providercfg.SepayCredentials{APIToken: "default-token"},
 		WebhookSecret: "default-secret",
 	}); err != nil {
@@ -103,7 +103,7 @@ func TestUpsertBlankSecretKeepsStored(t *testing.T) {
 
 	first, err := svc.Upsert(ctx, providercfg.UpsertInput{
 		Provider: "sepay", Mode: "test", Enabled: true, ProductID: prod.ID,
-		Config:        providercfg.SepayConfig{BankName: "MB Bank", AccountNo: "111"},
+		Config:        providercfg.SepayConfig{BankName: "MB Bank", BankCode: "MB", AccountNo: "111"},
 		Credentials:   providercfg.SepayCredentials{APIToken: "keep-me"},
 		WebhookSecret: "keep-secret",
 	})
@@ -112,7 +112,7 @@ func TestUpsertBlankSecretKeepsStored(t *testing.T) {
 	}
 	second, err := svc.Upsert(ctx, providercfg.UpsertInput{
 		Provider: "sepay", Mode: "test", Enabled: true, ProductID: prod.ID,
-		Config: providercfg.SepayConfig{BankName: "MB Bank", AccountNo: "222"},
+		Config: providercfg.SepayConfig{BankName: "MB Bank", BankCode: "MB", AccountNo: "222"},
 	})
 	if err != nil {
 		t.Fatalf("upsert without secrets: %v", err)
@@ -165,7 +165,7 @@ func TestUpsertSealsAgainstInsertedID(t *testing.T) {
 
 	created, err := svc.Upsert(ctx, providercfg.UpsertInput{
 		Provider: "sepay", Mode: "test", Enabled: true, ProductID: prod.ID,
-		Config:        providercfg.SepayConfig{BankName: "MB Bank", AccountNo: "111"},
+		Config:        providercfg.SepayConfig{BankName: "MB Bank", BankCode: "MB", AccountNo: "111"},
 		Credentials:   providercfg.SepayCredentials{APIToken: "first-token"},
 		WebhookSecret: "first-secret",
 	})
@@ -197,7 +197,7 @@ func TestUpsertSealsAgainstInsertedID(t *testing.T) {
 
 	updated, err := svc.Upsert(ctx, providercfg.UpsertInput{
 		Provider: "sepay", Mode: "test", Enabled: true, ProductID: prod.ID,
-		Config:        providercfg.SepayConfig{BankName: "MB Bank", AccountNo: "222"},
+		Config:        providercfg.SepayConfig{BankName: "MB Bank", BankCode: "MB", AccountNo: "222"},
 		Credentials:   providercfg.SepayCredentials{APIToken: "second-token"},
 		WebhookSecret: "second-secret",
 	})
@@ -257,7 +257,7 @@ func TestConcurrentUpsertKeepsCiphertextDecryptable(t *testing.T) {
 			<-start
 			_, err := svc.Upsert(ctx, providercfg.UpsertInput{
 				Provider: "sepay", Mode: "test", Enabled: true, ProductID: prod.ID,
-				Config:        providercfg.SepayConfig{BankName: "MB Bank", AccountNo: fmt.Sprintf("100%d", i)},
+				Config:        providercfg.SepayConfig{BankName: "MB Bank", BankCode: "MB", AccountNo: fmt.Sprintf("100%d", i)},
 				Credentials:   providercfg.SepayCredentials{APIToken: fmt.Sprintf("token-%d", i)},
 				WebhookSecret: fmt.Sprintf("secret-%d", i),
 			})
@@ -366,7 +366,7 @@ func TestResolveInvalidEnabledRowIsConfigInvalid(t *testing.T) {
 	}
 	row, err := svc.Upsert(ctx, providercfg.UpsertInput{
 		Provider: "sepay", Mode: "test", Enabled: true, ProductID: prod.ID,
-		Config:        providercfg.SepayConfig{BankName: "MB Bank", AccountNo: "111"},
+		Config:        providercfg.SepayConfig{BankName: "MB Bank", BankCode: "MB", AccountNo: "111"},
 		Credentials:   providercfg.SepayCredentials{APIToken: "token"},
 		WebhookSecret: "secret",
 	})
@@ -436,7 +436,7 @@ func TestUpsertValidatesProviderConfigs(t *testing.T) {
 	if err := s.CreateProduct(ctx, prod); err != nil {
 		t.Fatal(err)
 	}
-	sepayCfg := providercfg.SepayConfig{BankName: "MB Bank", AccountNo: "111"}
+	sepayCfg := providercfg.SepayConfig{BankName: "MB Bank", BankCode: "MB", AccountNo: "111"}
 	sepayCreds := providercfg.SepayCredentials{APIToken: "token"}
 	payosCfg := providercfg.PayOSConfig{ClientID: "client"}
 	payosCreds := providercfg.PayOSCredentials{APIKey: "key", ChecksumKey: "checksum"}
@@ -514,11 +514,11 @@ func TestResolvePrecedenceAndModeIsolation(t *testing.T) {
 	}
 
 	upsert(providercfg.UpsertInput{Provider: "sepay", Mode: "live", Enabled: true,
-		Config:        providercfg.SepayConfig{BankName: "Default Bank", AccountNo: "000"},
+		Config:        providercfg.SepayConfig{BankName: "Default Bank", BankCode: "MB", AccountNo: "000"},
 		Credentials:   providercfg.SepayCredentials{APIToken: "live-default"},
 		WebhookSecret: "live-default-secret"})
 	upsert(providercfg.UpsertInput{Provider: "sepay", Mode: "live", Enabled: true, ProductID: prodX.ID,
-		Config:        providercfg.SepayConfig{BankName: "Override Bank", AccountNo: "111"},
+		Config:        providercfg.SepayConfig{BankName: "Override Bank", BankCode: "MB", AccountNo: "111"},
 		Credentials:   providercfg.SepayCredentials{APIToken: "live-x"},
 		WebhookSecret: "live-x-secret"})
 
@@ -547,7 +547,7 @@ func TestResolvePrecedenceAndModeIsolation(t *testing.T) {
 	// Test and live rows are separate worlds. The service's configured
 	// default mode is used only when the caller omits one.
 	upsert(providercfg.UpsertInput{Provider: "sepay", Mode: "test", Enabled: true,
-		Config:        providercfg.SepayConfig{BankName: "Test Bank", AccountNo: "999"},
+		Config:        providercfg.SepayConfig{BankName: "Test Bank", BankCode: "MB", AccountNo: "999"},
 		Credentials:   providercfg.SepayCredentials{APIToken: "test-default"},
 		WebhookSecret: "test-default-secret"})
 	testSvc := providercfg.NewService(s, codec, "test")

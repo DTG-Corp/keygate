@@ -2,6 +2,7 @@ package sepay_test
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"testing"
 	"time"
@@ -31,6 +32,32 @@ func TestBuildQRImageURL(t *testing.T) {
 	u, err = url.Parse(raw)
 	if err != nil || u.Query().Get("des") != "KG7F3K2Q chuyen tien" {
 		t.Fatalf("escaped url = %s (%v)", raw, err)
+	}
+}
+
+func TestProviderCreateAttemptRejectsMissingBankConfig(t *testing.T) {
+	full := provider.BankAccount{BankName: "MB Bank", AccountNo: "0978482700", AccountName: "NGUYEN VAN A"}
+	cases := []struct {
+		name string
+		cfg  sepay.Config
+	}{
+		{"missing account number", sepay.Config{Bank: provider.BankAccount{BankName: "MB Bank"}, BankCode: "MB"}},
+		{"missing bank code", sepay.Config{Bank: full}},
+		{"blank account number", sepay.Config{Bank: provider.BankAccount{BankName: "MB Bank", AccountNo: "   "}, BankCode: "MB"}},
+		{"blank bank code", sepay.Config{Bank: full, BankCode: "  "}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := sepay.New(tc.cfg).CreateAttempt(context.Background(), provider.CreateAttemptRequest{
+				OrderCode: "KG7F3K2Q", AmountMinor: 50000, Currency: "VND",
+			})
+			if !errors.Is(err, sepay.ErrMissingBankConfig) {
+				t.Fatalf("err = %v, want ErrMissingBankConfig", err)
+			}
+			if res.QRImageURL != "" || res.ProviderRef != "" {
+				t.Fatalf("unusable result returned: %+v", res)
+			}
+		})
 	}
 }
 

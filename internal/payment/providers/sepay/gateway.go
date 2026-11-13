@@ -4,9 +4,11 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/tabloy/keygate/internal/payment/domain"
 	"github.com/tabloy/keygate/internal/payment/provider"
@@ -50,6 +52,8 @@ func ParseIPN(header http.Header, raw []byte, ipnSecret string) (provider.Webhoo
 		return provider.WebhookEvent{}, ErrWebhookUnauthorized
 	}
 	var p struct {
+		// Timestamp is the IPN occurrence time in Unix seconds.
+		Timestamp        int64  `json:"timestamp"`
 		NotificationType string `json:"notification_type"`
 		Order            struct {
 			OrderInvoiceNumber string `json:"order_invoice_number"`
@@ -81,9 +85,24 @@ func ParseIPN(header http.Header, raw []byte, ipnSecret string) (provider.Webhoo
 			eventID = nt
 		}
 	}
+	// A signed notification with no transaction id, invoice or notification
+	// type still needs a stable non-empty id: settlement rejects "" and
+	// would turn every delivery into a 500 the provider retries forever.
+	if eventID == "" {
+		sum := sha256.Sum256(raw)
+		eventID = hex.EncodeToString(sum[:])[:16]
+	}
 	ev := provider.WebhookEvent{Provider: "sepay", ProviderEventID: eventID, ProviderRef: p.Transaction.ID,
 		OrderCode: strings.TrimSpace(p.Order.OrderInvoiceNumber), TransferType: "in",
 		Currency: p.Order.OrderCurrency, Raw: raw}
+	// payment_transactions.occurred_at is NOT NULL: never leave the zero
+	// time. An absent, zero or out-of-range timestamp falls back to the
+	// receipt time rather than writing a year-0001 row.
+	if p.Timestamp > 0 {
+		ev.OccurredAt = time.Unix(p.Timestamp, 0).UTC()
+	} else {
+		ev.OccurredAt = time.Now().UTC()
+	}
 	if p.NotificationType == "ORDER_PAID" && p.Order.OrderStatus == "CAPTURED" && p.Transaction.TransactionStatus == "APPROVED" {
 		ev.Status = domain.OrderPaid
 	} else if p.NotificationType == "TRANSACTION_VOID" {

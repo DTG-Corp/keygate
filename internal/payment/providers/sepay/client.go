@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -82,7 +83,7 @@ func (c *Client) ListTransactions(ctx context.Context, from, to time.Time, since
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, ErrRateLimited
+		return nil, &RateLimitError{RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("sepay: list transactions status %d", resp.StatusCode)
@@ -104,7 +105,13 @@ func (c *Client) ListTransactions(ctx context.Context, from, to time.Time, since
 	}
 	out := make([]BankTransaction, 0, len(body.Transactions))
 	for _, t := range body.Transactions {
-		ts, _ := time.Parse(time.RFC3339, t.TransactionDate)
+		// An unparsable date is an error, not a zero time: the reconciler
+		// advances its since-cursor from these rows, and year 1 would make
+		// every later pass re-read the whole table.
+		ts, err := time.Parse(time.RFC3339, t.TransactionDate)
+		if err != nil {
+			return nil, fmt.Errorf("sepay: transaction %d has invalid transaction_date %q: %w", t.ID, t.TransactionDate, err)
+		}
 		out = append(out, BankTransaction{ID: t.ID, TransactionDate: ts, AccountNumber: t.AccountNumber,
 			Code: t.Code, Content: t.Content, TransferType: t.TransferType,
 			TransferAmount: t.TransferAmount, ReferenceCode: t.ReferenceCode})
@@ -112,9 +119,48 @@ func (c *Client) ListTransactions(ctx context.Context, from, to time.Time, since
 	return out, nil
 }
 
+// parseRetryAfter reads the HTTP Retry-After header in both its forms:
+// delay-seconds and the HTTP-date form. An absent or unusable value
+// yields zero, and the caller applies its own default backoff.
+func parseRetryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if at, err := http.ParseTime(v); err == nil {
+		if d := time.Until(at); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
 // ErrRateLimited is returned on HTTP 429 so a caller can back off
 // instead of treating the page as empty.
 var ErrRateLimited = errors.New("sepay: rate limited")
+
+// RateLimitError is the 429 error: it unwraps to ErrRateLimited and
+// carries the Retry-After hint, when the server sent a usable one.
+type RateLimitError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("%v (retry after %s)", ErrRateLimited, e.RetryAfter)
+	}
+	return ErrRateLimited.Error()
+}
+
+// Unwrap keeps errors.Is(err, ErrRateLimited) true for callers that only
+// switch on the sentinel.
+func (e *RateLimitError) Unwrap() error { return ErrRateLimited }
 
 func (c *Client) httpClient() *http.Client {
 	if c.HTTP != nil {

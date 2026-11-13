@@ -175,7 +175,7 @@ func (s *Service) Upsert(ctx context.Context, in UpsertInput) (*model.PaymentPro
 		if err != nil {
 			return nil, err
 		}
-		if err := validateConfig(provider, cfgJSON, in.Enabled); err != nil {
+		if err := validateConfig(provider, cfgJSON, in.Enabled, mode); err != nil {
 			return nil, err
 		}
 	} else if in.Enabled {
@@ -187,7 +187,7 @@ func (s *Service) Upsert(ctx context.Context, in UpsertInput) (*model.PaymentPro
 		if existing != nil {
 			effective = existing.Config
 		}
-		if err := validateConfig(provider, effective, true); err != nil {
+		if err := validateConfig(provider, effective, true, mode); err != nil {
 			return nil, err
 		}
 	}
@@ -296,7 +296,7 @@ func (s *Service) Resolve(ctx context.Context, productID, provider, mode string)
 	if err != nil {
 		return nil, fmt.Errorf("%w: stored webhook secret cannot be decrypted", ErrProviderConfigInvalid)
 	}
-	if err := validateConfig(row.Provider, row.Config, true); err != nil {
+	if err := validateConfig(row.Provider, row.Config, true, row.Mode); err != nil {
 		return nil, err
 	}
 	if err := validateCredentials(row.Provider, creds, true); err != nil {
@@ -431,7 +431,7 @@ func marshalProviderObject(v any, what string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func validateConfig(provider string, raw []byte, requireComplete bool) error {
+func validateConfig(provider string, raw []byte, requireComplete bool, mode string) error {
 	switch provider {
 	case "sepay":
 		var c SepayConfig
@@ -444,8 +444,21 @@ func validateConfig(provider string, raw []byte, requireComplete bool) error {
 		if strings.TrimSpace(c.AccountNo) == "" {
 			return fmt.Errorf("%w: sepay config.account_no is required for an enabled provider", ErrProviderConfigInvalid)
 		}
-		if c.BankName == "" && c.BankCode == "" && c.BankBIN == "" {
-			return fmt.Errorf("%w: sepay config needs a bank name, code or BIN for an enabled provider", ErrProviderConfigInvalid)
+		// The adapter builds the static QR from the short bank code; a row
+		// without it would render "?bank=&amount=…" and no banking app
+		// could pay the transfer.
+		if strings.TrimSpace(c.BankCode) == "" {
+			return fmt.Errorf("%w: sepay config.bank_code is required for an enabled provider", ErrProviderConfigInvalid)
+		}
+		if c.BankName == "" && c.BankBIN == "" {
+			return fmt.Errorf("%w: sepay config needs a bank name or BIN for an enabled provider", ErrProviderConfigInvalid)
+		}
+
+		// mode=none accepts unsigned deliveries. That is a legitimate
+		// dashboard test setting, but fail-open in live mode, so refuse the
+		// combination at write time as well as at webhook time (T8).
+		if mode == "live" && strings.EqualFold(strings.TrimSpace(c.WebhookAuthMode), "none") {
+			return fmt.Errorf("%w: sepay webhook_auth_mode must not be none in live mode", ErrProviderConfigInvalid)
 		}
 	case "payos":
 		var c PayOSConfig
