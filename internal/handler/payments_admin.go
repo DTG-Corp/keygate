@@ -41,7 +41,9 @@ type PaymentsAdminHandler struct {
 	Providers  checkout.ProviderFactory
 	// PayOSConfirmer registers this install's webhook URL with PayOS.
 	// main injects the client so the credentials stay out of the handler.
-	PayOSConfirmer func(ctx context.Context, url string) error
+	// productID is "" for the install-wide row, or the product whose
+	// PayOS override supplies the credentials.
+	PayOSConfirmer func(ctx context.Context, url, productID string) error
 	// PublicBaseURL is the install's public origin, used to build the
 	// PayOS webhook URL when the payment_webhook_base_url setting is not
 	// set.
@@ -659,12 +661,28 @@ func (h *PaymentsAdminHandler) TestProvider(c *gin.Context) {
 
 // ConfirmPayOSWebhook tells PayOS which URL to deliver to. The URL comes
 // from the payment_webhook_base_url setting, or the install's public
-// origin when the setting is empty.
+// origin when the setting is empty. An optional product_id query scopes
+// the confirmation to that product's PayOS row, for a product that has
+// its own credentials and no install-wide row.
 func (h *PaymentsAdminHandler) ConfirmPayOSWebhook(c *gin.Context) {
 	if h.PayOSConfirmer == nil {
 		response.Err(c, http.StatusServiceUnavailable, "PAYMENT_PROVIDER_DISABLED",
 			"payment providers are not configured on this server")
 		return
+	}
+	productID := strings.TrimSpace(c.Query("product_id"))
+	if productID != "" {
+		// Resolve falls back to the install-wide row, so a mistyped
+		// product id would otherwise confirm against a product that does
+		// not exist. Answer like the other admin product lookups.
+		if _, err := h.Store.FindProductByID(c, productID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				response.NotFound(c, "product not found")
+				return
+			}
+			response.Internal(c, err)
+			return
+		}
 	}
 	base := strings.TrimSpace(h.PublicBaseURL)
 	if stored, err := h.Store.GetSetting(c, "payment_webhook_base_url"); err == nil && strings.TrimSpace(stored) != "" {
@@ -679,12 +697,16 @@ func (h *PaymentsAdminHandler) ConfirmPayOSWebhook(c *gin.Context) {
 		return
 	}
 	webhookURL := strings.TrimRight(base, "/") + "/api/v1/webhook/payos"
-	if err := h.PayOSConfirmer(c, webhookURL); err != nil {
+	if err := h.PayOSConfirmer(c, webhookURL, productID); err != nil {
 		response.Err(c, http.StatusBadGateway, "PAYMENT_PROVIDER_ERROR",
 			"PayOS rejected the webhook confirmation: "+clipForMessage(err.Error()))
 		return
 	}
-	h.audit(c, nil, "payos_webhook_confirmed", map[string]any{"url": webhookURL})
+	changes := map[string]any{"url": webhookURL}
+	if productID != "" {
+		changes["product_id"] = productID
+	}
+	h.audit(c, nil, "payos_webhook_confirmed", changes)
 	response.OK(c, gin.H{"provider": "payos", "webhook_url": webhookURL, "confirmed": true})
 }
 
@@ -723,11 +745,13 @@ func (h *PaymentsAdminHandler) transaction(c *gin.Context) (*model.PaymentTransa
 // refuses the operation outright; a config that cannot be resolved
 // refuses too. Only a resolvable test configuration allows a licence to
 // be granted without money moving through a provider. A handler built
-// without a config service (a developer install with no master key) has
-// no rail to check and keeps the plan's rehearsal path.
+// without a config service has no rail to check, so it refuses as well:
+// an unverifiable rail is not a test rail.
 func (h *PaymentsAdminHandler) manualSettlementIsTestOnly(c *gin.Context, order *model.PaymentOrder) bool {
 	if h.Config == nil {
-		return true
+		response.Err(c, http.StatusUnprocessableEntity, "PAYMENT_MANUAL_SETTLEMENT_UNVERIFIABLE",
+			"manual settlement needs a provider configuration service")
+		return false
 	}
 	rows, err := h.Config.List(c)
 	if err != nil {

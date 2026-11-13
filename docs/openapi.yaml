@@ -6077,12 +6077,11 @@ paths:
         when an enabled live config for this order's rail and product does
         not exist and a usable test configuration resolves. A live config
         covering the order is `PAYMENT_MANUAL_SETTLEMENT_FORBIDDEN`; a
-        missing, disabled or broken row (when the config service exists)
-        is `PAYMENT_MANUAL_SETTLEMENT_UNVERIFIABLE`. An install with no
-        config service at all keeps the rehearsal path. Only a pending
-        order can be settled (`PAYMENT_ORDER_NOT_PAYABLE` otherwise). The
-        grant is idempotent: it uses the same settlement service as a
-        webhook.
+        missing, disabled or broken row, or a server with no config
+        service at all, is `PAYMENT_MANUAL_SETTLEMENT_UNVERIFIABLE`. Only
+        a pending order can be settled (`PAYMENT_ORDER_NOT_PAYABLE`
+        otherwise). The grant is idempotent: it uses the same settlement
+        service as a webhook.
       operationId: adminMarkPaymentOrderPaid
       x-required-scopes: [admin]
       security:
@@ -6695,13 +6694,17 @@ paths:
         No body. Builds
         `{payment_webhook_base_url or BASE_URL}/api/v1/webhook/payos`
         and asks PayOS to register it. PayOS probes the URL immediately,
-        so it must be public HTTPS. Resolves the install-wide PayOS row
-        only (not a product override). There is no PayOS sandbox.
+        so it must be public HTTPS. Resolves the install-wide PayOS row,
+        or the PayOS row of the product named by `product_id` when that
+        query parameter is present; an unknown product is 404. There is
+        no PayOS sandbox.
       operationId: adminConfirmPayOSWebhook
       x-required-scopes: [admin]
       security:
         - BearerAuth: []
         - CookieAuth: []
+      parameters:
+        - { name: product_id, in: query, schema: { type: string, format: uuid }, description: "Confirm against this product's PayOS row instead of the install-wide row." }
       responses:
         "200":
           description: Registered
@@ -6724,6 +6727,9 @@ paths:
           $ref: "#/components/responses/AdminUnauthorized"
         "403":
           $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`NOT_FOUND`: `product_id` names no product."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
         "429":
           $ref: "#/components/responses/RateLimited"
         "502":

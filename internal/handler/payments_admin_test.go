@@ -76,6 +76,9 @@ func TestAdminMarkPaidRecordsManualSettlement(t *testing.T) {
 	f := newAPIFixture(t)
 	order := f.adminOrder(t, "sepay", 100)
 	h := adminPayments(f)
+	// Manual settlement only runs against a resolvable test row, so the
+	// success path needs one.
+	h.Config = sepayTestConfig(t, f, "test", true, "")
 
 	code, out := f.call(h.MarkPaid, http.MethodPost, "/api/v1/admin/payments/orders/"+order.Code+"/mark-paid",
 		`{"reason":"bank transfer confirmed in app"}`, nil, gin.Param{Key: "code", Value: order.Code})
@@ -274,6 +277,7 @@ func TestAdminOrderDetailIncludesProviderRows(t *testing.T) {
 func TestAdminCancelOrder(t *testing.T) {
 	f := newAPIFixture(t)
 	h := adminPayments(f)
+	h.Config = payosTestConfig(t, f)
 	order := f.adminOrder(t, "sepay", 700)
 	paid := f.adminOrder(t, "payos", 800)
 	if code, out := f.call(h.MarkPaid, "POST", "/api/v1/admin/payments/orders/"+paid.Code+"/mark-paid",
@@ -307,6 +311,7 @@ func TestAdminCancelOrder(t *testing.T) {
 func TestAdminRefundRecordsAndFlipsTheOrder(t *testing.T) {
 	f := newAPIFixture(t)
 	h := adminPayments(f)
+	h.Config = sepayTestConfig(t, f, "test", true, "")
 	order := f.adminOrder(t, "sepay", 10_000)
 	if code, out := f.call(h.MarkPaid, "POST", "/api/v1/admin/payments/orders/"+order.Code+"/mark-paid",
 		`{"reason":"bank transfer"}`, nil, gin.Param{Key: "code", Value: order.Code}); code != http.StatusOK {
@@ -346,6 +351,7 @@ func TestAdminRefundRecordsAndFlipsTheOrder(t *testing.T) {
 func TestAdminRefundRefusals(t *testing.T) {
 	f := newAPIFixture(t)
 	h := adminPayments(f)
+	h.Config = sepayTestConfig(t, f, "test", true, "")
 	pending := f.adminOrder(t, "sepay", 1000)
 	paid := f.adminOrder(t, "sepay", 1000)
 	if code, _ := f.call(h.MarkPaid, "POST", "/api/v1/admin/payments/orders/"+paid.Code+"/mark-paid",
@@ -724,9 +730,11 @@ func TestAdminConfirmPayOSWebhook(t *testing.T) {
 		t.Fatalf("no confirmer = %d %v, want 503", code, out)
 	}
 
-	var called string
-	h.PayOSConfirmer = func(_ context.Context, url string) error {
-		called = url
+	var calledURL, calledProduct string
+	calls := 0
+	h.PayOSConfirmer = func(_ context.Context, url, productID string) error {
+		calls++
+		calledURL, calledProduct = url, productID
 		return nil
 	}
 	code, out = f.call(h.ConfirmPayOSWebhook, http.MethodPost, "/api/v1/admin/payments/providers/payos/confirm-webhook", "", nil)
@@ -744,11 +752,41 @@ func TestAdminConfirmPayOSWebhook(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("confirm = %d %v", code, out)
 	}
-	if called != "https://shop.example.test/api/v1/webhook/payos" {
-		t.Fatalf("confirmed %q", called)
+	if calledURL != "https://shop.example.test/api/v1/webhook/payos" {
+		t.Fatalf("confirmed %q", calledURL)
+	}
+	if calledProduct != "" {
+		t.Fatalf("install-wide confirm got product %q, want empty", calledProduct)
+	}
+	data, _ := out["data"].(map[string]any)
+	if data["provider"] != "payos" || data["confirmed"] != true || data["webhook_url"] != calledURL {
+		t.Fatalf("confirm data = %v, want the unchanged {provider, webhook_url, confirmed} shape", data)
 	}
 
-	h.PayOSConfirmer = func(context.Context, string) error { return errors.New("payos rejected it") }
+	// A product-scoped confirm hands the product to the resolver, so a
+	// product with its own PayOS row and no install-wide row can register.
+	code, out = f.call(h.ConfirmPayOSWebhook, http.MethodPost,
+		"/api/v1/admin/payments/providers/payos/confirm-webhook?product_id="+f.prodA.ID, "", nil)
+	if code != http.StatusOK {
+		t.Fatalf("product confirm = %d %v", code, out)
+	}
+	if calledProduct != f.prodA.ID {
+		t.Fatalf("product confirm got product %q, want %q", calledProduct, f.prodA.ID)
+	}
+
+	// A product that does not exist is refused before PayOS is called:
+	// Resolve would otherwise fall back to the install-wide row.
+	before := calls
+	code, out = f.call(h.ConfirmPayOSWebhook, http.MethodPost,
+		"/api/v1/admin/payments/providers/payos/confirm-webhook?product_id="+uuid.NewString(), "", nil)
+	if code != http.StatusNotFound {
+		t.Fatalf("unknown product confirm = %d %v, want 404", code, out)
+	}
+	if calls != before {
+		t.Fatalf("confirmer ran for an unknown product (%d -> %d calls)", before, calls)
+	}
+
+	h.PayOSConfirmer = func(context.Context, string, string) error { return errors.New("payos rejected it") }
 	code, out = f.call(h.ConfirmPayOSWebhook, http.MethodPost, "/api/v1/admin/payments/providers/payos/confirm-webhook", "", nil)
 	if code != http.StatusBadGateway || errCode(out) != "PAYMENT_PROVIDER_ERROR" {
 		t.Fatalf("failed confirm = %d %v, want 502", code, out)
@@ -867,6 +905,27 @@ func sepayTestConfig(t *testing.T, f *apiFixture, mode string, enabled bool, pro
 	return svc
 }
 
+// payosTestConfig is sepayTestConfig for the hosted PayOS rail: one
+// enabled install-wide test row, enough for mark-paid's guard to resolve
+// a test configuration for a PayOS order.
+func payosTestConfig(t *testing.T, f *apiFixture) *providercfg.Service {
+	t.Helper()
+	codec, err := providercfg.NewCodec(bytes.Repeat([]byte{0x66}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.cleanupProviderConfigSlots(t, providerConfigSlot{Provider: "payos", Mode: "test"})
+	svc := providercfg.NewService(f.s, codec, "test")
+	if _, err := svc.Upsert(f.ctx, providercfg.UpsertInput{
+		Provider: "payos", Mode: "test", Enabled: true,
+		Config:      providercfg.PayOSConfig{ClientID: "client-" + uuid.NewString()[:8]},
+		Credentials: providercfg.PayOSCredentials{APIKey: "key-" + uuid.NewString()[:8], ChecksumKey: "sum-" + uuid.NewString()[:8]},
+	}); err != nil {
+		t.Fatalf("upsert payos config: %v", err)
+	}
+	return svc
+}
+
 // A disabled provider row must refuse manual settlement rather than
 // skip the guard: an unresolvable config is exactly when a licence must
 // not be granted by hand.
@@ -932,6 +991,30 @@ func TestAdminMarkPaidAllowsTestProviderConfig(t *testing.T) {
 	}
 }
 
+// A handler with no config service cannot prove the rail is a test rail,
+// so mark-paid fails closed instead of granting a licence on an
+// unverifiable configuration.
+func TestAdminMarkPaidRefusesWithoutConfigService(t *testing.T) {
+	f := newAPIFixture(t)
+	order := f.adminOrder(t, "sepay", 6789)
+	h := adminPayments(f)
+	if h.Config != nil {
+		t.Fatal("fixture handler unexpectedly has a config service")
+	}
+
+	code, out := f.call(h.MarkPaid, http.MethodPost, "/api/v1/admin/payments/orders/"+order.Code+"/mark-paid",
+		`{"reason":"operator says so"}`, nil, gin.Param{Key: "code", Value: order.Code})
+	if code != http.StatusUnprocessableEntity || errCode(out) != "PAYMENT_MANUAL_SETTLEMENT_UNVERIFIABLE" {
+		t.Fatalf("nil config mark paid = %d %v, want 422 PAYMENT_MANUAL_SETTLEMENT_UNVERIFIABLE", code, out)
+	}
+	if got, _ := f.s.GetPaymentOrderByCode(f.ctx, order.Code); got.Status != domain.OrderPending {
+		t.Fatalf("order = %q, want pending", got.Status)
+	}
+	if n, _ := f.s.DB.NewSelect().Table("licenses").Where("id = ?", order.ID).Count(f.ctx); n != 0 {
+		t.Fatalf("licences = %d, want 0", n)
+	}
+}
+
 // ─── fix round 1: match direction and API-key actors ───
 
 // A payout recorded with direction=out is never money for an order; the
@@ -985,6 +1068,7 @@ func waitAudit(t *testing.T, f *apiFixture, entityID, action string) *model.Audi
 func TestAdminRefundWithAPIKeyPrincipal(t *testing.T) {
 	f := newAPIFixture(t)
 	h := adminPayments(f)
+	h.Config = sepayTestConfig(t, f, "test", true, "")
 	order := f.adminOrder(t, "sepay", 10_000)
 	if code, out := f.call(h.MarkPaid, http.MethodPost, "/api/v1/admin/payments/orders/"+order.Code+"/mark-paid",
 		`{"reason":"bank transfer"}`, nil, gin.Param{Key: "code", Value: order.Code}); code != http.StatusOK {

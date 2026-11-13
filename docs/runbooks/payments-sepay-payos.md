@@ -161,8 +161,11 @@ To rehearse without money, write a **test**-mode row and no live row for
 the rail, create an order, then use `mark-paid`. `mark-paid` refuses
 (`409 PAYMENT_MANUAL_SETTLEMENT_FORBIDDEN`) as soon as any enabled live
 row covers the order's product and rail, so do this before the live row
-exists. In live mode the only settlement paths are a verified webhook or
-an operator matching a real incoming transfer.
+exists. It also fails closed with `422
+PAYMENT_MANUAL_SETTLEMENT_UNVERIFIABLE` when no usable test row resolves,
+including a server without the provider config service (no
+`RELEASE_KEY_ENCRYPTION_KEY`). In live mode the only settlement paths are
+a verified webhook or an operator matching a real incoming transfer.
 
 ## 2. PayOS hosted links
 
@@ -212,8 +215,10 @@ This calls PayOS's `confirm-webhook` with
 a sample delivery, so the endpoint must already be public HTTPS and
 answer `2xx`. Success is
 `{"provider":"payos","webhook_url":"…","confirmed":true}`. It resolves
-the **install-wide** PayOS row (not a product override) and refuses with
-`400 PAYMENT_WEBHOOK_URL_UNSET` if no base URL exists.
+the **install-wide** PayOS row, or the row of the product named by the
+optional `?product_id=…` query (for a product override with no
+install-wide row); an unknown product is `404`. It refuses with `400
+PAYMENT_WEBHOOK_URL_UNSET` if no base URL exists.
 
 Repeat the call after changing `BASE_URL`, or when PayOS reports the
 webhook as unverified. A PayOS refusal is `502 PAYMENT_PROVIDER_ERROR`

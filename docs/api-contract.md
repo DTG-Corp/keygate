@@ -481,13 +481,12 @@ payloads there (PII and provider noise — admin only).
 the answer is `data: {order}`. It is a rehearsal facility: it refuses
 (`409 PAYMENT_MANUAL_SETTLEMENT_FORBIDDEN`) when an enabled live config
 row covers the order's rail and product, and refuses (`422
-PAYMENT_MANUAL_SETTLEMENT_UNVERIFIABLE`) when the config service exists
-but the row is missing, disabled or unusable. Only a resolvable `test`
-configuration lets it grant a licence without money moving. A handler
-built with no config service at all (a developer install without
-`RELEASE_KEY_ENCRYPTION_KEY`) keeps the rehearsal path. Any other order
-state is `409 PAYMENT_ORDER_NOT_PAYABLE`. It settles through the same
-service as a webhook, so the grant is idempotent.
+PAYMENT_MANUAL_SETTLEMENT_UNVERIFIABLE`) when the row is missing,
+disabled or unusable, or when the server has no config service at all
+(no `RELEASE_KEY_ENCRYPTION_KEY`). Only a resolvable `test`
+configuration lets it grant a licence without money moving. Any other
+order state is `409 PAYMENT_ORDER_NOT_PAYABLE`. It settles through the
+same service as a webhook, so the grant is idempotent.
 
 `POST …/cancel` has no body and answers `data: {order}`; it is `404
 PAYMENT_ORDER_NOT_FOUND` or `409 PAYMENT_ORDER_NOT_PAYABLE` (paid orders
@@ -567,10 +566,11 @@ Provider configuration:
   It builds `{payment_webhook_base_url or BASE_URL}/api/v1/webhook/payos`
   and asks PayOS to register it; PayOS probes the URL immediately, so
   it must be public HTTPS. Success is
-  `{provider, webhook_url, confirmed: true}`. Missing base URL is `400
-  PAYMENT_WEBHOOK_URL_UNSET`; a PayOS refusal is `502
-  PAYMENT_PROVIDER_ERROR`. It resolves the **install-wide** PayOS row
-  only.
+  `{provider, webhook_url, confirmed: true}`. The optional `product_id`
+  query scopes the credentials to that product's PayOS row (default: the
+  install-wide row); a `product_id` that names no product is `404
+  NOT_FOUND`. Missing base URL is `400 PAYMENT_WEBHOOK_URL_UNSET`; a
+  PayOS refusal is `502 PAYMENT_PROVIDER_ERROR`.
 
 Plan prices:
 

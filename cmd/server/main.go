@@ -507,12 +507,14 @@ func main() {
 		Store: db, Settlement: settleSvc, Config: providerSvc, Providers: providerFactory,
 		// Registering the webhook is a PayOS client call, not an adapter
 		// method: ConfirmWebhook lives outside the Provider interface
-		// because no checkout path uses it.
-		PayOSConfirmer: func(ctx context.Context, url string) error {
+		// because no checkout path uses it. productID comes from the
+		// admin request and selects that product's PayOS row; "" is the
+		// install-wide row.
+		PayOSConfirmer: func(ctx context.Context, url, productID string) error {
 			if providerSvc == nil {
 				return providercfg.ErrProviderNotConfigured
 			}
-			cfg, err := providerSvc.Resolve(ctx, "", "payos", "")
+			cfg, err := providerSvc.Resolve(ctx, productID, "payos", "")
 			if err != nil {
 				return err
 			}
