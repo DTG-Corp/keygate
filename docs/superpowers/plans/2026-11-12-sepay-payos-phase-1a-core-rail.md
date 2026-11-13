@@ -735,17 +735,19 @@ const (
 	OrderRefunded         = "refunded"
 	OrderPartiallyRefunded = "partially_refunded"
 
-	AttemptCreated  = "created"
-	AttemptPending  = "pending"
-	AttemptPaid     = "paid"
-	AttemptFailed   = "failed"
-	AttemptExpired  = "expired"
-	AttemptCanceled = "canceled"
+	// Attempt statuses mirror the payment_attempts.status CHECK.
+	AttemptCreated   = "created"
+	AttemptPending   = "pending"
+	AttemptSucceeded = "succeeded"
+	AttemptFailed    = "failed"
+	AttemptExpired   = "expired"
+	AttemptCanceled  = "canceled"
 
+	// Transaction statuses mirror payment_transactions.status. Refunds
+	// are rows in payment_refunds, not a transaction status.
 	TxMatched   = "matched"
 	TxUnmatched = "unmatched"
 	TxIgnored   = "ignored"
-	TxRefunded  = "refunded"
 )
 
 // IsOrderTerminal reports whether an order can no longer be paid. A
@@ -754,7 +756,7 @@ const (
 // instead of granting a licence.
 func IsOrderTerminal(status string) bool {
 	switch status {
-	case OrderPaid, OrderExpired, OrderCanceled, OrderRefunded:
+	case OrderPaid, OrderExpired, OrderCanceled, OrderRefunded, OrderPartiallyRefunded:
 		return true
 	}
 	return false
