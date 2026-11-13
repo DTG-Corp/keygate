@@ -1286,6 +1286,8 @@ const zh = {
   "admin.order_code": "订单号",
   "admin.ignore": "忽略",
   "admin.ignore_reason": "忽略原因",
+  "admin.unmatched_reason": "进入队列的原因",
+  "admin.unmatched_suggestion": "建议匹配",
   "admin.matched_ok": "交易已匹配",
   "admin.ignored_ok": "交易已忽略",
   "admin.content": "内容",

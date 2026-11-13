@@ -182,6 +182,8 @@ const vi = {
   "admin.order_code": "Mã đơn",
   "admin.ignore": "Bỏ qua",
   "admin.ignore_reason": "Lý do bỏ qua",
+  "admin.unmatched_reason": "Lý do chờ xử lý",
+  "admin.unmatched_suggestion": "Gợi ý",
   "admin.matched_ok": "Đã khớp giao dịch",
   "admin.ignored_ok": "Đã bỏ qua giao dịch",
   "admin.content": "Nội dung",

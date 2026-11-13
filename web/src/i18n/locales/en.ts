@@ -1341,6 +1341,8 @@ const en = {
   "admin.order_code": "Order code",
   "admin.ignore": "Ignore",
   "admin.ignore_reason": "Reason for ignoring",
+  "admin.unmatched_reason": "Why it is queued",
+  "admin.unmatched_suggestion": "Suggestion",
   "admin.matched_ok": "Transaction matched",
   "admin.ignored_ok": "Transaction ignored",
   "admin.content": "Memo",

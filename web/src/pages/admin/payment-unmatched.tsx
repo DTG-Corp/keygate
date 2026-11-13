@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { EyeOff, Link2 } from "lucide-react"
+import { AlertTriangle, EyeOff, Link2 } from "lucide-react"
 import { useState } from "react"
 import { showToast } from "@/components/toast"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -107,8 +108,28 @@ export default function PaymentUnmatchedPage() {
                 {rows.map((row) => (
                   <DataTableRow key={row.id}>
                     <DataTableCell className="text-sm">{providerName(row.provider)}</DataTableCell>
-                    <DataTableCell className="max-w-[10rem] truncate font-mono text-xs">
-                      {row.provider_ref}
+                    <DataTableCell className="max-w-[16rem] text-xs">
+                      <div className="max-w-[10rem] truncate font-mono">{row.provider_ref}</div>
+                      {row.ignore_reason && (
+                        <div className="mt-1 max-w-[16rem] space-y-1 whitespace-normal">
+                          {isSuggestion(row.ignore_reason) && (
+                            <Badge
+                              variant="outline"
+                              className="gap-1 border-amber-300 bg-amber-50 px-1.5 py-0 text-[10px] font-medium text-amber-700 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                            >
+                              <AlertTriangle className="h-2.5 w-2.5" aria-hidden="true" />
+                              {t("admin.unmatched_suggestion")}
+                            </Badge>
+                          )}
+                          <p
+                            className="break-words text-[11px] leading-snug text-muted-foreground"
+                            title={row.ignore_reason}
+                          >
+                            <span className="sr-only">{t("admin.unmatched_reason")}: </span>
+                            {row.ignore_reason}
+                          </p>
+                        </div>
+                      )}
                     </DataTableCell>
                     <DataTableCell className="whitespace-nowrap tabular-nums">
                       {formatMoney(row.amount_minor, row.currency, currencyExponent(row.currency))}
@@ -242,4 +263,14 @@ function providerName(provider: string): string {
   if (provider === "sepay") return "SePay"
   if (provider === "payos") return "PayOS"
   return provider
+}
+
+// The reconcile worker explains in English why it left a transfer for an
+// operator; the only note that is a proposal rather than a verdict is
+// the amount-only suggestion. The reason text itself is server data and
+// stays as written, so only the badge that flags a suggestion is
+// localized. Matching on the prefix only affects the badge: a reworded
+// note still shows its full text, just without the badge.
+function isSuggestion(reason: string): boolean {
+  return reason.startsWith("amount-only suggestion")
 }
