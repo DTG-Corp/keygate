@@ -5596,7 +5596,7 @@ git commit -m "feat(payments): checkout service, public pay dispatcher and consu
   - `store.ListPaymentOrders(ctx, filter OrderFilter) ([]*model.PaymentOrder, int, error)`, `store.OrderFilter{Status, ProductID, Email, Provider string; Limit, Offset int}`
   - `store.ListPaymentTransactions(ctx, filter TransactionFilter) ([]*model.PaymentTransaction, int, error)`, `store.ListUnmatchedTransactions(ctx, limit int)`, `store.MatchTransaction(ctx, id, orderID string) error`, `store.IgnoreTransaction(ctx, id, reason string) error`
   - `store.RecordPaymentRefund(ctx, r *model.PaymentRefund) error`
-  - `store.GetPaymentSyncCursor(ctx, provider string) (*model.PaymentSyncCursor, error)`, `store.SetPaymentSyncCursor(ctx, providerName string, lastID int64, at time.Time) error`
+  - `store.GetPaymentSyncCursor(ctx, providerName, scope string) (*model.PaymentSyncCursor, error)`, `store.SetPaymentSyncCursor(ctx, providerName, scope, lastTransactionID string, at time.Time) error` (spec §4.10 keys cursors by `(provider, scope)` and stores the provider's own ID as TEXT)
   - `handler.PaymentsAdminHandler{Store, Settlement, Config, Providers, PayOSConfirmer func(ctx, url string) error}` with routes `GET /admin/payments/orders`, `GET /admin/payments/orders/:code`, `POST …/mark-paid`, `POST …/cancel`, `POST …/refund`, `GET /admin/payments/transactions`, `GET /admin/payments/unmatched`, `POST /admin/payments/transactions/:id/match`, `POST /admin/payments/transactions/:id/ignore`, `GET /admin/payments/health`, `POST /admin/payments/providers/:id/test`, `POST /admin/payments/providers/payos/confirm-webhook`.
 
 - [ ] **Step 1: Write the failing matcher test (Review Focus #3)**
@@ -5833,12 +5833,12 @@ func (w *Worker) reconcilePayOS(ctx context.Context) error {
 }
 
 func (w *Worker) reconcileSePay(ctx context.Context) error {
-	cursor, err := w.Store.GetPaymentSyncCursor(ctx, "sepay")
+	cursor, err := w.Store.GetPaymentSyncCursor(ctx, "sepay", "default")
 	from := time.Now().Add(-24 * time.Hour)
 	var sinceID int64
 	if err == nil && cursor != nil {
-		from = cursor.CursorTime.Add(-5 * time.Minute)
-		sinceID = cursor.LastTransactionID
+		from = cursor.LastSyncedAt.Add(-5 * time.Minute)
+		sinceID, _ = strconv.ParseInt(cursor.LastTransactionID, 10, 64)
 	}
 	cfg, err := w.config(ctx, "", "sepay")
 	if err != nil || cfg.APIToken == "" {
@@ -5878,7 +5878,7 @@ func (w *Worker) reconcileSePay(ctx context.Context) error {
 		if err := w.Settlement.Settle(ctx, order.ID, "sepay", ev); err != nil {
 			return err
 		}
-		_ = w.Store.SetPaymentSyncCursor(ctx, "sepay", tx.ID, tx.TransactionDate)
+		_ = w.Store.SetPaymentSyncCursor(ctx, "sepay", "default", itoa(tx.ID), tx.TransactionDate)
 	}
 	return nil
 }
@@ -5996,27 +5996,30 @@ func (s *Store) RecordPaymentRefund(ctx context.Context, r *model.PaymentRefund)
 	return err
 }
 
-func (s *Store) GetPaymentSyncCursor(ctx context.Context, providerName string) (*model.PaymentSyncCursor, error) {
+func (s *Store) GetPaymentSyncCursor(ctx context.Context, providerName, scope string) (*model.PaymentSyncCursor, error) {
 	row := new(model.PaymentSyncCursor)
-	err := s.DB.NewSelect().Model(row).Where("provider = ?", providerName).Limit(1).Scan(ctx)
+	err := s.DB.NewSelect().Model(row).
+		Where("provider = ?", providerName).Where("scope = ?", scope).
+		Limit(1).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, sql.ErrNoRows
 	}
 	return row, err
 }
 
-func (s *Store) SetPaymentSyncCursor(ctx context.Context, providerName string, lastID int64, at time.Time) error {
+func (s *Store) SetPaymentSyncCursor(ctx context.Context, providerName, scope, lastTransactionID string, at time.Time) error {
 	_, err := s.DB.NewInsert().Model(&model.PaymentSyncCursor{
-		Provider: providerName, LastTransactionID: lastID, CursorTime: at, UpdatedAt: time.Now(),
-	}).On("CONFLICT (provider) DO UPDATE").
+		ID: NewID(), Provider: providerName, Scope: scope,
+		LastTransactionID: lastTransactionID, LastSyncedAt: &at, UpdatedAt: time.Now(),
+	}).On("CONFLICT (provider, scope) DO UPDATE").
 		Set("last_transaction_id = EXCLUDED.last_transaction_id").
-		Set("cursor_time = EXCLUDED.cursor_time").
-		Set("updated_at = now()").Exec(ctx)
+		Set("last_synced_at = EXCLUDED.last_synced_at").
+		Set("updated_at = EXCLUDED.updated_at").Exec(ctx)
 	return err
 }
 ```
 
-`payment_transactions` needs `ignore_reason TEXT NOT NULL DEFAULT ''`; add it to the T1 DDL if absent.
+`PaymentSyncCursor` fields come from spec §4.10: `Provider, Scope, LastTransactionID string, LastSyncedAt *time.Time, UpdatedAt time.Time`. `payment_transactions` needs `ignore_reason TEXT NOT NULL DEFAULT ''` in addition to the spec columns; add it to the T1 migration.
 
 - [ ] **Step 6: Write the failing admin handler test**
 
