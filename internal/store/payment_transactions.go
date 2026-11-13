@@ -32,11 +32,13 @@ type PaymentTransactionInput struct {
 	// Direction is "in" (customer paid) or "out" (refund/payout). Empty
 	// means "in", the schema default.
 	Direction string
-	// Reference and Content are the bank reference and transfer memo the
-	// unmatched queue shows.
-	Reference string
-	Content   string
-	Status    string
+	// ProviderAccount, Reference and Content are the account that
+	// received the transfer, the bank reference and the memo: the three
+	// fields the unmatched queue shows an operator.
+	ProviderAccount string
+	Reference       string
+	Content         string
+	Status          string
 	// IgnoreReason explains a row that was not applied: the settlement
 	// failure that recorded it, or the operator's reason for ignoring
 	// it. Persisted in payment_transactions.ignore_reason.
@@ -87,7 +89,8 @@ func (s *Store) InsertPaymentTransaction(ctx context.Context, tx bun.IDB, in Pay
 	row := &model.PaymentTransaction{
 		ID: NewID(), Provider: in.Provider, ProviderRef: in.ProviderRef, OrderID: in.OrderID,
 		AttemptID: attemptID, AmountMinor: in.AmountMinor, Currency: in.Currency,
-		Direction: direction, Reference: in.Reference, Content: in.Content,
+		Direction: direction, ProviderAccount: in.ProviderAccount,
+		Reference: in.Reference, Content: in.Content,
 		Status: in.Status, IgnoreReason: in.IgnoreReason,
 		Raw: raw, OccurredAt: occurred, CreatedAt: time.Now(),
 	}

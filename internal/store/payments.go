@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -13,6 +14,16 @@ import (
 	"github.com/tabloy/keygate/internal/model"
 	"github.com/tabloy/keygate/internal/payment/domain"
 )
+
+// ErrTransactionNotFound means no payment_transactions row carries the
+// id the admin API asked for.
+var ErrTransactionNotFound = errors.New("payment transaction not found")
+
+// ErrTransactionNotUnmatched means a transaction was already matched or
+// ignored, so the operator action that targets the unmatched queue does
+// not apply to it. Repeating a match is not an error the store invents a
+// second row for; the caller reports the state instead.
+var ErrTransactionNotUnmatched = errors.New("payment transaction is not unmatched")
 
 // ErrOrderNotFound means no payment order carries the code, numeric code
 // or id that was asked for.
@@ -417,4 +428,223 @@ func validAttemptStatus(status string) bool {
 		return true
 	}
 	return false
+}
+
+// ─── Admin lists, the unmatched queue and the reconciler reads ───
+
+// OrderFilter is the window and predicates one admin order list asks
+// for. Every field is optional: an empty string does not constrain, and
+// a zero limit hands the paging decision to the caller (the HTTP layer
+// always sets one). Email is compared case-insensitively because
+// payment_orders_email_idx is on lower(email) and that is the form the
+// rows store.
+type OrderFilter struct {
+	Status, Kind, ProductID, Email, Provider string
+	Limit, Offset                            int
+}
+
+func (f OrderFilter) apply(q *bun.SelectQuery) *bun.SelectQuery {
+	if f.Status != "" {
+		q = q.Where("status = ?", strings.ToLower(f.Status))
+	}
+	if f.Kind != "" {
+		q = q.Where("kind = ?", strings.ToLower(f.Kind))
+	}
+	if f.ProductID != "" {
+		q = q.Where("product_id = ?", f.ProductID)
+	}
+	if f.Email != "" {
+		q = q.Where("lower(email) = ?", strings.ToLower(strings.TrimSpace(f.Email)))
+	}
+	if f.Provider != "" {
+		q = q.Where("provider = ?", strings.ToLower(f.Provider))
+	}
+	return q
+}
+
+// ListPaymentOrders reads one filtered page of orders plus the total the
+// filter matches, so an admin table can page without counting rows it
+// did not ask for.
+func (s *Store) ListPaymentOrders(ctx context.Context, f OrderFilter) ([]*model.PaymentOrder, int, error) {
+	q := f.apply(s.DB.NewSelect().Model((*model.PaymentOrder)(nil)))
+	total, err := q.Count(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	if f.Limit > 0 {
+		q = q.Limit(f.Limit)
+	}
+	if f.Offset > 0 {
+		q = q.Offset(f.Offset)
+	}
+	var out []*model.PaymentOrder
+	if err := q.Order("created_at DESC", "id DESC").Scan(ctx, &out); err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
+}
+
+// ListPendingPaymentOrders reads the oldest pending orders a reconciler
+// may still settle. A limit keeps one slow provider pass from reading
+// the whole table; the next pass continues where this one stopped
+// because rows are ordered oldest first.
+func (s *Store) ListPendingPaymentOrders(ctx context.Context, providerName string, limit int) ([]*model.PaymentOrder, error) {
+	q := s.DB.NewSelect().Model((*model.PaymentOrder)(nil)).
+		Where("status = ?", domain.OrderPending).
+		Where("provider = ?", strings.ToLower(providerName)).
+		Order("created_at ASC", "id ASC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	var out []*model.PaymentOrder
+	if err := q.Scan(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// FindPendingPaymentOrdersForMatch returns the pending orders of one
+// provider whose total equals the transfer and whose creation time falls
+// inside the window. The caller decides what a single answer and several
+// answers mean; the store only narrows the rows. Five is enough to tell
+// "one" from "more than one" and bounds a pathological amount collision.
+func (s *Store) FindPendingPaymentOrdersForMatch(ctx context.Context, providerName string, amountMinor int64, from, to time.Time) ([]*model.PaymentOrder, error) {
+	var out []*model.PaymentOrder
+	err := s.DB.NewSelect().Model(&out).
+		Where("status = ?", domain.OrderPending).
+		Where("provider = ?", strings.ToLower(providerName)).
+		Where("total_minor = ?", amountMinor).
+		Where("created_at >= ?", from).
+		Where("created_at <= ?", to).
+		Order("created_at ASC", "id ASC").
+		Limit(5).
+		Scan(ctx)
+	return out, err
+}
+
+// TransactionFilter is the window and predicates one admin transaction
+// list asks for. ProductID narrows to the orders of one product, which
+// is also how an API key bound to a product is kept inside it: a
+// transaction with no order is operator income, not a merchant's row.
+type TransactionFilter struct {
+	Provider, Direction, Status, ProductID, OrderID string
+	Limit, Offset                                   int
+}
+
+func (f TransactionFilter) apply(q *bun.SelectQuery) *bun.SelectQuery {
+	if f.Provider != "" {
+		q = q.Where("provider = ?", strings.ToLower(f.Provider))
+	}
+	if f.Direction != "" {
+		q = q.Where("direction = ?", strings.ToLower(f.Direction))
+	}
+	if f.Status != "" {
+		q = q.Where("status = ?", strings.ToLower(f.Status))
+	}
+	if f.OrderID != "" {
+		q = q.Where("order_id = ?", f.OrderID)
+	}
+	if f.ProductID != "" {
+		q = q.Where("order_id IN (SELECT id FROM payment_orders WHERE product_id = ?)", f.ProductID)
+	}
+	return q
+}
+
+// ListPaymentTransactions reads one filtered page of transfers plus the
+// total the filter matches.
+func (s *Store) ListPaymentTransactions(ctx context.Context, f TransactionFilter) ([]*model.PaymentTransaction, int, error) {
+	q := f.apply(s.DB.NewSelect().Model((*model.PaymentTransaction)(nil)))
+	total, err := q.Count(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	if f.Limit > 0 {
+		q = q.Limit(f.Limit)
+	}
+	if f.Offset > 0 {
+		q = q.Offset(f.Offset)
+	}
+	var out []*model.PaymentTransaction
+	if err := q.Order("occurred_at DESC", "id DESC").Scan(ctx, &out); err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
+}
+
+// ListUnmatchedTransactions is the operator queue: transfers the
+// reconciler could not attach to an order, newest first. It is kept
+// separate from ListPaymentTransactions so a caller that only needs the
+// queue does not have to remember which filter spells it.
+func (s *Store) ListUnmatchedTransactions(ctx context.Context, limit int) ([]*model.PaymentTransaction, error) {
+	q := s.DB.NewSelect().Model((*model.PaymentTransaction)(nil)).
+		Where("status = ?", domain.TxUnmatched).
+		Order("occurred_at DESC", "id DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	var out []*model.PaymentTransaction
+	if err := q.Scan(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetPaymentTransaction reads one transfer by id.
+func (s *Store) GetPaymentTransaction(ctx context.Context, id string) (*model.PaymentTransaction, error) {
+	row := new(model.PaymentTransaction)
+	err := s.DB.NewSelect().Model(row).Where("id = ?", id).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrTransactionNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return row, nil
+}
+
+// RecordTransactionMatchedBy stamps the operator and the time on a
+// transfer a settlement just matched. It is deliberately not the match
+// itself: settlement owns the state transition so the row cannot say
+// "matched" before the order is paid. This only records who asked for
+// it, after the money is safe.
+func (s *Store) RecordTransactionMatchedBy(ctx context.Context, id, matchedBy string) error {
+	var by any
+	if matchedBy != "" {
+		by = matchedBy
+	}
+	_, err := s.DB.NewUpdate().Model((*model.PaymentTransaction)(nil)).
+		Set("matched_by = ?", by).
+		Set("matched_at = now()").
+		Where("id = ?", id).
+		Exec(ctx)
+	return err
+}
+
+// IgnoreTransaction takes a transfer out of the unmatched queue without
+// attaching it to an order: bank fees, other income, a duplicate the
+// operator has accounted for elsewhere. The UPDATE carries the unmatched
+// predicate so a match that landed first is never overwritten; a row that
+// is gone answers ErrTransactionNotFound and a row another operator
+// already decided answers ErrTransactionNotUnmatched.
+func (s *Store) IgnoreTransaction(ctx context.Context, id, reason string) error {
+	res, err := s.DB.NewUpdate().Model((*model.PaymentTransaction)(nil)).
+		Set("status = ?", domain.TxIgnored).
+		Set("ignore_reason = ?", reason).
+		Where("id = ?", id).
+		Where("status = ?", domain.TxUnmatched).
+		Exec(ctx)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		return nil
+	}
+	exists, err := s.DB.NewSelect().Model((*model.PaymentTransaction)(nil)).Where("id = ?", id).Exists(ctx)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return ErrTransactionNotFound
+	}
+	return ErrTransactionNotUnmatched
 }

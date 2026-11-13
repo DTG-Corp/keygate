@@ -38,6 +38,7 @@ import (
 	"github.com/tabloy/keygate/internal/payment/providercfg"
 	"github.com/tabloy/keygate/internal/payment/providers/payos"
 	"github.com/tabloy/keygate/internal/payment/providers/sepay"
+	"github.com/tabloy/keygate/internal/payment/reconcile"
 	"github.com/tabloy/keygate/internal/payment/settlement"
 	"github.com/tabloy/keygate/internal/service"
 	"github.com/tabloy/keygate/internal/storage"
@@ -502,6 +503,24 @@ func main() {
 	}
 	paymentsAPIH := &handler.PaymentsAPIHandler{Checkout: checkoutSvc, Store: db}
 	paymentsPublicH := &handler.PaymentsPublicHandler{Checkout: checkoutSvc, Store: db, Stripe: stripeH}
+	paymentsAdminH := &handler.PaymentsAdminHandler{
+		Store: db, Settlement: settleSvc, Config: providerSvc, Providers: providerFactory,
+		// Registering the webhook is a PayOS client call, not an adapter
+		// method: ConfirmWebhook lives outside the Provider interface
+		// because no checkout path uses it.
+		PayOSConfirmer: func(ctx context.Context, url string) error {
+			if providerSvc == nil {
+				return providercfg.ErrProviderNotConfigured
+			}
+			cfg, err := providerSvc.Resolve(ctx, "", "payos", "")
+			if err != nil {
+				return err
+			}
+			client := &payos.Client{ClientID: cfg.ClientID, APIKey: cfg.APIKey, ChecksumKey: cfg.ChecksumKey}
+			return client.ConfirmWebhook(ctx, url)
+		},
+		PublicBaseURL: cfg.BaseURL,
+	}
 	expiryChecker := service.NewExpiryChecker(db, emailSvc, webhookSvc, logger)
 	if cfg.StripeSecretKey != "" {
 		expiryChecker.EndPastDueUpgrade = stripeH.EndPastDueUpgrade
@@ -588,6 +607,18 @@ func main() {
 	go webhookSvc.StartRetryLoop(ctx, webhookRetryInterval)
 
 	go floatingSvc.StartCleanupLoop(ctx, time.Minute)
+
+	// Payment reconciliation: closes lapsed orders, asks PayOS about
+	// pending orders whose webhook never arrived and pulls the bank's
+	// transfers since the cursor. It only settles through the same
+	// service a webhook uses, so it can never grant more than one.
+	if providerSvc != nil {
+		rec := &reconcile.Worker{
+			Store: db, Config: providerSvc, Matcher: &reconcile.Matcher{Store: db},
+			Settlement: settleSvc, Log: logger,
+		}
+		go rec.Run(ctx)
+	}
 
 	go expiryChecker.StartExpiryLoop(ctx)
 
@@ -1297,6 +1328,23 @@ func main() {
 			admin.PUT("/payments/providers", providerH.Upsert)
 			admin.DELETE("/payments/providers/:id/secrets", providerH.DeleteSecrets)
 		}
+
+		// Payment operations are admin-only, reads included: the ledger
+		// carries buyer emails, provider references and the unmatched
+		// queue's raw payloads. Manual settlement, refunds and matches
+		// are money-moving audit events, not routine merchant calls.
+		admin.GET("/payments/orders", paymentsAdminH.ListOrders)
+		admin.GET("/payments/orders/:code", paymentsAdminH.GetOrder)
+		admin.POST("/payments/orders/:code/mark-paid", paymentsAdminH.MarkPaid)
+		admin.POST("/payments/orders/:code/cancel", paymentsAdminH.CancelOrder)
+		admin.POST("/payments/orders/:code/refund", paymentsAdminH.RefundOrder)
+		admin.GET("/payments/transactions", paymentsAdminH.ListTransactions)
+		admin.GET("/payments/unmatched", paymentsAdminH.ListUnmatched)
+		admin.POST("/payments/transactions/:id/match", paymentsAdminH.MatchTransaction)
+		admin.POST("/payments/transactions/:id/ignore", paymentsAdminH.IgnoreTransaction)
+		admin.GET("/payments/health", paymentsAdminH.Health)
+		admin.POST("/payments/providers/:id/test", paymentsAdminH.TestProvider)
+		admin.POST("/payments/providers/payos/confirm-webhook", paymentsAdminH.ConfirmPayOSWebhook)
 
 		admin.POST("/entitlements", adminH.CreateEntitlement)
 		admin.PUT("/entitlements/:id", adminH.UpdateEntitlement)
