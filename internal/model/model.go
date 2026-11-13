@@ -214,10 +214,17 @@ type APIKey struct {
 // We resist the urge to pre-emptively add every read/write split.
 // Real customer asks decide what gets added (e.g. usage:write,
 // licenses:read). Keep this list short and meaningful.
+//
+// payments:write / payments:read are the exception the consumer
+// payments API forced: a merchant backend that creates orders is a
+// different principal from the one that reconciles them, and the split
+// is what lets the read-only one hold nothing that can move money.
 const (
 	ScopeAdmin         = "admin"
 	ScopeLicensesWrite = "licenses:write"
 	ScopeReleasesWrite = "releases:write"
+	ScopePaymentsWrite = "payments:write"
+	ScopePaymentsRead  = "payments:read"
 )
 
 // AllScopes is the closed enumeration used to validate
@@ -225,7 +232,10 @@ const (
 // rejected at the boundary so a typo doesn't silently become a
 // useless key.
 func AllScopes() []string {
-	return []string{ScopeAdmin, ScopeLicensesWrite, ScopeReleasesWrite}
+	return []string{
+		ScopeAdmin, ScopeLicensesWrite, ScopeReleasesWrite,
+		ScopePaymentsWrite, ScopePaymentsRead,
+	}
 }
 
 // IsValidScope reports whether s is a known scope.

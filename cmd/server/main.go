@@ -33,7 +33,11 @@ import (
 	"github.com/tabloy/keygate/internal/middleware"
 	"github.com/tabloy/keygate/internal/model"
 	"github.com/tabloy/keygate/internal/payment"
+	"github.com/tabloy/keygate/internal/payment/checkout"
+	"github.com/tabloy/keygate/internal/payment/provider"
 	"github.com/tabloy/keygate/internal/payment/providercfg"
+	"github.com/tabloy/keygate/internal/payment/providers/payos"
+	"github.com/tabloy/keygate/internal/payment/providers/sepay"
 	"github.com/tabloy/keygate/internal/payment/settlement"
 	"github.com/tabloy/keygate/internal/service"
 	"github.com/tabloy/keygate/internal/storage"
@@ -458,6 +462,46 @@ func main() {
 	paymentsWebhookH := &handler.PaymentsWebhookHandler{
 		Store: db, Config: providerSvc, Settlement: settleSvc, Log: logger,
 	}
+	// providerFactory maps one resolved provider row onto an adapter.
+	// Resolving is a database read plus decryption, and the adapters make
+	// no network call in New, so building one costs nothing at startup.
+	// Only this function knows how a ResolvedConfig becomes a
+	// sepay.Config or a payos.Config.
+	providerFactory := func(ctx context.Context, productID, providerName string) (provider.Provider, *providercfg.ResolvedConfig, error) {
+		if providerSvc == nil {
+			return nil, nil, providercfg.ErrProviderNotConfigured
+		}
+		cfg, err := providerSvc.Resolve(ctx, productID, providerName, "")
+		if err != nil {
+			return nil, nil, err
+		}
+		switch providerName {
+		case "sepay":
+			return sepay.New(sepay.Config{
+				Sandbox:         cfg.Mode == "test",
+				WebhookAuthMode: cfg.WebhookAuthMode,
+				APIKey:          cfg.APIKey,
+				IPNSecret:       cfg.IPNSecret,
+				APIToken:        cfg.APIToken,
+				Bank: provider.BankAccount{
+					BankName: cfg.BankName, AccountNo: cfg.AccountNo, AccountName: cfg.AccountName,
+				},
+				BankCode: cfg.BankCode,
+			}), cfg, nil
+		case "payos":
+			return payos.New(payos.Config{
+				ClientID: cfg.ClientID, APIKey: cfg.APIKey, ChecksumKey: cfg.ChecksumKey,
+			}), cfg, nil
+		default:
+			return nil, nil, providercfg.ErrProviderUnknown
+		}
+	}
+	checkoutSvc := &checkout.Service{
+		Store: db, Config: providerSvc, Providers: providerFactory,
+		Webhooks: webhookSvc, Log: logger, BaseURL: cfg.BaseURL,
+	}
+	paymentsAPIH := &handler.PaymentsAPIHandler{Checkout: checkoutSvc, Store: db}
+	paymentsPublicH := &handler.PaymentsPublicHandler{Checkout: checkoutSvc, Store: db, Stripe: stripeH}
 	expiryChecker := service.NewExpiryChecker(db, emailSvc, webhookSvc, logger)
 	if cfg.StripeSecretKey != "" {
 		expiryChecker.EndPastDueUpgrade = stripeH.EndPastDueUpgrade
@@ -953,8 +997,33 @@ func main() {
 		middleware.RateLimitByIPScoped("checkout_verify", 60, time.Minute),
 		stripeH.VerifyCheckoutSession)
 
-	// Unified checkout: GET /pay/:checkout_id → Stripe
-	r.GET("/pay/:checkout_id", stripeH.CheckoutByPlan)
+	// Unified checkout: GET /pay/:checkout_id serves both rails. A KG
+	// order code answers 302 to the SPA pay page; everything else is a
+	// legacy Stripe checkout id and keeps that handler unchanged.
+	r.GET("/pay/:checkout_id", paymentsPublicH.PayPage)
+	// The public poller behind the pay page. The order code is the only
+	// capability: no session, no key, and no buyer identity in the body.
+	r.GET("/pay/:checkout_id/status",
+		middleware.RateLimitByIPScoped("payments_public", cfg.RateLimitAPI, time.Minute),
+		paymentsPublicH.Status)
+
+	// Consumer payments API. Every key is optionally bound to one product,
+	// and the handlers refuse anything outside it; create is the only
+	// route with Idempotency, where a retry would otherwise be a second
+	// order and a second QR.
+	payWrite := v1.Group("/payments",
+		middleware.APIKeyAuth(db),
+		middleware.RequireScope(model.ScopePaymentsWrite),
+		middleware.RateLimitByIPScoped("payments_api", cfg.RateLimitAPI, time.Minute))
+	payRead := v1.Group("/payments",
+		middleware.APIKeyAuth(db),
+		middleware.RequireScope(model.ScopePaymentsRead, model.ScopePaymentsWrite))
+	{
+		payWrite.POST("/orders", middleware.Idempotency(db), paymentsAPIH.Create)
+		payWrite.POST("/orders/:code/cancel", paymentsAPIH.Cancel)
+		payRead.GET("/orders/:code", paymentsAPIH.Get)
+		payRead.GET("/orders", paymentsAPIH.List)
+	}
 
 	// Self sign-up for free plans (/pay sends those plans to the form).
 	// The code-sending step shares the login's buckets, so it cannot be

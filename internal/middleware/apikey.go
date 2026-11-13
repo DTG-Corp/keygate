@@ -25,8 +25,16 @@ func APIKeyAuth(s *store.Store) gin.HandlerFunc {
 			return
 		}
 
-		c.Set("product_id", product.ID)
-		c.Set("product", product)
+		// auth_type is what RequireScope switches on; without it a
+		// scoped API-key route would refuse every key as unauthenticated.
+		c.Set("auth_type", "api_key")
+		// A system-wide key is not bound to one product. Handlers that
+		// care read product_id; a key with no product must not turn into
+		// a nil dereference here.
+		if product != nil {
+			c.Set("product_id", product.ID)
+			c.Set("product", product)
+		}
 		c.Set("api_key", apiKey)
 		c.Next()
 	}
