@@ -323,7 +323,7 @@ type PlanPrice struct {
 	Provider          string    `bun:",notnull" json:"provider"`
 	Currency          string    `bun:",notnull" json:"currency"`
 	AmountMinor       int64     `bun:",notnull" json:"amount_minor"`
-	CurrencyExponent  int16     `bun:",notnull,default:2" json:"currency_exponent"`
+	CurrencyExponent  int16     `bun:",notnull" json:"currency_exponent"` // no default: tag: bun would store DEFAULT 2 for VND (0)
 	BillingInterval   string    `bun:",notnull,default:''" json:"billing_interval"`
 	ExternalPriceID   string    `bun:",notnull,default:''" json:"external_price_id"`
 	Active            bool      `bun:",notnull,default:true" json:"active"`
@@ -337,10 +337,10 @@ type PaymentProviderConfig struct {
 	Provider               string          `bun:",notnull" json:"provider"`
 	ProductID              string          `bun:",nullzero" json:"product_id,omitempty"`
 	Mode                   string          `bun:",notnull" json:"mode"`
-	Enabled                bool            `bun:",notnull,default:true" json:"enabled"`
+	Enabled                bool            `bun:",notnull" json:"enabled"` // no default: tag: bun would store DEFAULT for false
 	Config                 json.RawMessage `bun:",notnull,type:jsonb" json:"config"`
-	CredentialsEncrypted   []byte          `bun:",notnull" json:"-"`
-	WebhookSecretEncrypted []byte          `bun:",notnull" json:"-"`
+	CredentialsEncrypted   []byte          `bun:",notnull,nullzero" json:"-"`
+	WebhookSecretEncrypted []byte          `bun:",notnull,nullzero" json:"-"`
 	CreatedAt              time.Time       `bun:",nullzero,default:now()" json:"created_at"`
 	UpdatedAt              time.Time       `bun:",nullzero,default:now()" json:"updated_at"`
 }
@@ -401,18 +401,25 @@ type PaymentAttempt struct {
 }
 
 type PaymentTransaction struct {
-	bun.BaseModel `bun:"table:payment_transactions"`
-	ID            string     `bun:",pk" json:"id"`
-	Provider      string     `bun:",notnull" json:"provider"`
-	ProviderRef   string     `bun:",notnull" json:"provider_ref"`
-	OrderID       *string    `bun:",nullzero" json:"order_id,omitempty"`
-	AmountMinor   int64      `bun:",notnull" json:"amount_minor"`
-	Currency      string     `bun:",notnull" json:"currency"`
-	Status        string     `bun:",notnull" json:"status"`
-	IgnoreReason  string     `bun:",notnull,default:''" json:"ignore_reason"`
-	Raw           []byte     `bun:",notnull,type:jsonb" json:"raw"`
-	OccurredAt    time.Time  `bun:",notnull" json:"occurred_at"`
-	CreatedAt     time.Time  `bun:",nullzero,default:now()" json:"created_at"`
+	bun.BaseModel  `bun:"table:payment_transactions"`
+	ID             string          `bun:",pk" json:"id"`
+	Provider       string          `bun:",notnull" json:"provider"`
+	ProviderRef    string          `bun:",notnull" json:"provider_ref"`
+	OrderID        *string         `bun:",nullzero" json:"order_id,omitempty"`
+	AttemptID      *string         `bun:",nullzero" json:"attempt_id,omitempty"`
+	AmountMinor    int64           `bun:",notnull" json:"amount_minor"`
+	Currency       string          `bun:",notnull" json:"currency"`
+	Direction      string          `bun:",notnull,default:'in'" json:"direction"`
+	Status         string          `bun:",notnull" json:"status"`
+	IgnoreReason   string          `bun:",notnull,default:''" json:"ignore_reason"`
+	ProviderAccount string         `bun:",notnull,default:''" json:"provider_account"`
+	Reference      string          `bun:",notnull,default:''" json:"reference"`
+	Content        string          `bun:",notnull,default:''" json:"content"`
+	MatchedBy      *string         `bun:",nullzero" json:"matched_by,omitempty"`
+	MatchedAt      *time.Time      `json:"matched_at,omitempty"`
+	Raw            json.RawMessage `bun:",notnull,type:jsonb" json:"raw"`
+	OccurredAt     time.Time       `bun:",notnull" json:"occurred_at"`
+	CreatedAt      time.Time       `bun:",nullzero,default:now()" json:"created_at"`
 }
 
 type PaymentEvent struct {
@@ -422,8 +429,8 @@ type PaymentEvent struct {
 	EventID       string    `bun:",notnull" json:"event_id"`
 	OrderID       string    `bun:",nullzero" json:"order_id,omitempty"`
 	Kind          string    `bun:",notnull" json:"kind"`
-	Raw           []byte    `bun:",notnull,type:jsonb" json:"raw"`
-	OccurredAt    time.Time `json:"occurred_at"`
+	Raw           json.RawMessage `bun:",notnull,type:jsonb" json:"raw"`
+	OccurredAt    time.Time       `json:"occurred_at"`
 	CreatedAt     time.Time `bun:",nullzero,default:now()" json:"created_at"`
 }
 ```
@@ -433,8 +440,8 @@ The `payment_transactions` unique index is `(provider, provider_ref)`; `payment_
 In `internal/model/model.go`, add to `Product`:
 
 ```go
-TaxRateBP        int  `bun:",notnull" json:"tax_rate_bp"`
-PriceIncludesTax bool `bun:",notnull" json:"price_includes_tax"`
+TaxRateBP        int   `bun:",notnull" json:"tax_rate_bp"`
+PriceIncludesTax *bool `bun:",nullzero" json:"price_includes_tax,omitempty"` // nil = column DEFAULT TRUE
 ```
 
 and to `LicenseRenewal` / `LicenseUpgrade`:
@@ -4976,7 +4983,8 @@ func TestCreateOrderResolvesPriceAndTotals(t *testing.T) {
 	s := testdb.Store(t)
 	ctx := context.Background()
 	suffix := time.Now().Format("150405.000000")
-	p := &model.Product{Name: "Co", Slug: "co-" + suffix, Type: "desktop", TaxRateBP: 1000, PriceIncludesTax: true}
+	taxInclusive := true
+	p := &model.Product{Name: "Co", Slug: "co-" + suffix, Type: "desktop", TaxRateBP: 1000, PriceIncludesTax: &taxInclusive}
 	if err := s.CreateProduct(ctx, p); err != nil {
 		t.Fatal(err)
 	}
@@ -5130,7 +5138,11 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 	}
 	subtotal := price.AmountMinor * int64(in.Quantity)
 	taxRate := product.TaxRateBP
-	totals := domain.ComputeTotals(subtotal, 0, taxRate, product.PriceIncludesTax)
+	priceIncludesTax := true
+	if product.PriceIncludesTax != nil {
+		priceIncludesTax = *product.PriceIncludesTax
+	}
+	totals := domain.ComputeTotals(subtotal, 0, taxRate, priceIncludesTax)
 
 	ttl := s.orderTTL(ctx)
 	expiresAt := time.Now().Add(ttl)
