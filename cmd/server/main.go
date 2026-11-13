@@ -883,7 +883,7 @@ func main() {
 
 	// Anonymous plan catalogue for a pricing page — the visitor has no
 	// account yet, so /portal/plans (session-gated) can't serve them.
-	// Rate-limited because each plan may trigger a Stripe price lookup.
+	// Prices are local plan_prices rows in this phase, not Stripe calls.
 	//
 	// Its own bucket: RateLimitByIP keys every route as "ip:<addr>",
 	// so an unscoped limiter here would spend the same counter the
@@ -892,7 +892,7 @@ func main() {
 	// logging in.
 	v1.GET("/products/:product_slug/plans",
 		middleware.RateLimitByIPScoped("public_plans", cfg.RateLimitAPI, time.Minute),
-		publicPlansH.ListPlans)
+		publicPlansH.List)
 
 	v1.POST("/webhook/stripe", middleware.RateLimitByIPScoped("stripe_webhook", 60, time.Minute), stripeH.Webhook)
 	// Stripe verify is hit by every successful checkout return, so the
@@ -1156,6 +1156,14 @@ func main() {
 		admin.PUT("/plans/:id", adminH.UpdatePlan)
 		admin.GET("/plans/:id/seat-impact", adminH.PlanSeatImpact)
 		admin.DELETE("/plans/:id", adminH.DeletePlan)
+
+		// Local plan prices are the only sellable price source in
+		// phase 1a; the editor replaces the active row per slot and
+		// retires (never deletes) the old one for order history.
+		planPriceH := handler.PlanPriceAdminHandler{Store: db}
+		admin.GET("/plans/:id/prices", planPriceH.List)
+		admin.PUT("/plans/:id/prices", planPriceH.Upsert)
+		admin.DELETE("/plans/:id/prices/:price_id", planPriceH.Delete)
 
 		admin.POST("/entitlements", adminH.CreateEntitlement)
 		admin.PUT("/entitlements/:id", adminH.UpdateEntitlement)
