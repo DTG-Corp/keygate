@@ -1034,9 +1034,9 @@ func main() {
 	r.GET("/pay/:checkout_id", paymentsPublicH.PayPage)
 	// The public poller behind the pay page. The order code is the only
 	// capability: no session, no key, and no buyer identity in the body.
-	r.GET("/pay/:checkout_id/status",
-		middleware.RateLimitByIPScoped("payments_public", cfg.RateLimitAPI, time.Minute),
-		paymentsPublicH.Status)
+	// It is mounted at the spec root path and under /api/v1 (the SPA's
+	// api client prefixes it), sharing one rate-limit scope.
+	handler.RegisterPublicStatusRoutes(r, paymentsPublicH, cfg.RateLimitAPI)
 
 	// Consumer payments API. Every key is optionally bound to one product,
 	// and the handlers refuse anything outside it; create is the only

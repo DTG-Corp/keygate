@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/tabloy/keygate/internal/middleware"
 	"github.com/tabloy/keygate/internal/model"
 	"github.com/tabloy/keygate/internal/payment"
 	"github.com/tabloy/keygate/internal/payment/checkout"
@@ -16,6 +18,29 @@ import (
 	"github.com/tabloy/keygate/internal/store"
 	"github.com/tabloy/keygate/pkg/response"
 )
+
+// The public order-status poll is mounted at two spellings: the spec
+// §6.1 root path handed out in links, and the /api/v1 path the SPA's api
+// client builds (it prefixes every request). Both share one rate-limit
+// scope so the alias cannot be used to double the poll budget.
+const (
+	PublicStatusRoute    = "/pay/:checkout_id/status"
+	PublicStatusAPIRoute = "/api/v1/pay/:checkout_id/status"
+	// publicStatusRateLimitScope is the bucket both spellings share.
+	publicStatusRateLimitScope = "payments_public"
+)
+
+// RegisterPublicStatusRoutes mounts the public status poll on r.
+//
+// It lives here rather than inline in main() so a router test mounts the
+// exact routes the server does: main() itself has no test, and a dropped
+// alias would otherwise only surface as a 404 in the browser.
+func RegisterPublicStatusRoutes(r gin.IRoutes, h *PaymentsPublicHandler, rateLimit int) {
+	r.GET(PublicStatusRoute,
+		middleware.RateLimitByIPScoped(publicStatusRateLimitScope, rateLimit, time.Minute), h.Status)
+	r.GET(PublicStatusAPIRoute,
+		middleware.RateLimitByIPScoped(publicStatusRateLimitScope, rateLimit, time.Minute), h.Status)
+}
 
 // PaymentsPublicHandler serves the two unauthenticated payment routes.
 // The order code is the capability: anyone holding it may see the

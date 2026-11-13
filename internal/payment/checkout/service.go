@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,15 @@ var (
 	// resolved into an adapter: unknown, disabled, incomplete, or a
 	// missing factory.
 	ErrProviderUnavailable = errors.New("payment provider is not available")
+	// ErrProviderError means a usable adapter could not create the
+	// payment instruction: the provider API failed or refused the
+	// request. It is upstream's fault, not the caller's, so the API maps
+	// it to 502 rather than 500.
+	ErrProviderError = errors.New("payment provider failed to create the payment instruction")
+	// ErrQuantityInvalid means the requested licence volume cannot be
+	// priced: it is outside 1..MaxQuantity, or multiplying it by the
+	// unit price would overflow the order's integer money.
+	ErrQuantityInvalid = errors.New("quantity is invalid")
 	// ErrPriceNotConfigured is re-exported so callers of checkout can
 	// errors.Is against one sentinel instead of importing store too.
 	ErrPriceNotConfigured = store.ErrPriceNotConfigured
@@ -43,14 +53,27 @@ const (
 	// priced in anything else is not sellable rather than accidentally
 	// charged in the wrong unit.
 	settlementCurrency = "VND"
-	// defaultProvider is the last resort when neither the request nor
-	// the install setting names one.
-	defaultProvider = "sepay"
+
+	// MaxQuantity caps one order. The spec sets no licence-volume
+	// policy; 100 seats is a sane ceiling that also keeps a hostile
+	// quantity far away from int64 money overflow.
+	MaxQuantity = 100
+
+	// maxOrderTotalMinor bounds one order so the VAT arithmetic cannot
+	// overflow: domain.ComputeTotals multiplies the subtotal by 10000,
+	// so the subtotal must stay below MaxInt64/20000 (about 4.6e14
+	// minor units — far beyond any licence sale).
+	maxOrderTotalMinor int64 = math.MaxInt64 / 20000
+
 	// defaultBaseURL is only used when the server was built without a
 	// public origin (tests, tools). The PayOS link needs *some* absolute
 	// URL and a local one keeps a dev instance usable.
 	defaultBaseURL = "http://localhost:9000"
 )
+
+// providerPriority is the fallback order when the request names no
+// provider: SePay first (the phase-1a primary rail), then PayOS.
+var providerPriority = []string{"sepay", "payos"}
 
 // ProviderFactory resolves one product's provider row into a ready
 // adapter. It is the only place that knows how a ResolvedConfig maps
@@ -71,8 +94,9 @@ type Service struct {
 	BaseURL string
 }
 
-// CreateOrderInput is one checkout request. Quantity below one reads as
-// one; Provider empty falls back to the install's default provider.
+// CreateOrderInput is one checkout request. Quantity must be between 1
+// and MaxQuantity; Provider empty falls back to the configured default
+// and then to the first provider that can actually sell the plan.
 type CreateOrderInput struct {
 	PlanID         string
 	Email          string
@@ -92,8 +116,8 @@ type OrderResult struct {
 }
 
 func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderResult, error) {
-	if in.Quantity <= 0 {
-		in.Quantity = 1
+	if in.Quantity < 1 || in.Quantity > MaxQuantity {
+		return nil, fmt.Errorf("%w: quantity must be between 1 and %d", ErrQuantityInvalid, MaxQuantity)
 	}
 	email := strings.ToLower(strings.TrimSpace(in.Email))
 	if email == "" || !strings.Contains(email, "@") {
@@ -110,20 +134,9 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 	if err != nil {
 		return nil, fmt.Errorf("%w: product not found", ErrPlanNotSellable)
 	}
-	providerName := s.providerName(ctx, in.Provider)
-	if s.Providers == nil {
-		return nil, fmt.Errorf("%w: no provider factory is configured", ErrProviderUnavailable)
-	}
-	prov, _, err := s.Providers(ctx, product.ID, providerName)
+	providerName, prov, price, err := s.resolveProvider(ctx, plan, product, in.Provider)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrProviderUnavailable, err)
-	}
-	if prov == nil {
-		return nil, fmt.Errorf("%w: provider %q resolved to no adapter", ErrProviderUnavailable, providerName)
-	}
-	price, err := s.Store.ResolvePlanPrice(ctx, plan.ID, providerName, settlementCurrency, plan.BillingInterval)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrPlanNotSellable, err)
+		return nil, err
 	}
 
 	// Reuse this buyer's still-open order for the same purchase. A
@@ -179,7 +192,7 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 		}
 		s.logger().Error("checkout: provider create attempt failed",
 			"order", order.Code, "provider", providerName, "error", err)
-		return nil, fmt.Errorf("create payment instruction: %w", err)
+		return nil, fmt.Errorf("%w: create payment instruction: %w", ErrProviderError, err)
 	}
 	attempt.ProviderRef = result.ProviderRef
 	attempt.QRPayload = result.QRPayload
@@ -207,7 +220,10 @@ func (s *Service) createOrder(
 	ctx context.Context, plan *model.Plan, product *model.Product,
 	price *model.PlanPrice, email, providerName string, in CreateOrderInput,
 ) (*model.PaymentOrder, error) {
-	subtotal := price.AmountMinor * int64(in.Quantity)
+	subtotal, err := orderSubtotal(price.AmountMinor, in.Quantity)
+	if err != nil {
+		return nil, err
+	}
 	taxRate := product.TaxRateBP
 	priceIncludesTax := true
 	if product.PriceIncludesTax != nil {
@@ -284,19 +300,118 @@ func payableAttempt(a *model.PaymentAttempt, now time.Time) bool {
 		a.ExpiresAt != nil && a.ExpiresAt.After(now)
 }
 
-// providerName normalises the requested provider and falls back to the
-// install setting, then to sepay.
-func (s *Service) providerName(ctx context.Context, requested string) string {
-	name := strings.ToLower(strings.TrimSpace(requested))
-	if name == "" {
-		if def, err := s.Store.GetSetting(ctx, "payment_default_provider"); err == nil {
-			name = strings.ToLower(strings.TrimSpace(def))
+// resolveProvider picks the provider, adapter and price for one order.
+//
+// An explicit request never falls back: asking for a provider that
+// cannot serve the plan is an error. With no explicit provider the
+// configured default is tried first, then sepay and payos in order. A
+// candidate is usable only when the plan has an active price for it and
+// the factory can resolve its config, which is what lets a PayOS-only
+// install sell without naming payos in every request (spec §3.3).
+func (s *Service) resolveProvider(ctx context.Context, plan *model.Plan, product *model.Product, requested string) (string, provider.Provider, *model.PlanPrice, error) {
+	if s.Providers == nil {
+		return "", nil, nil, fmt.Errorf("%w: no provider factory is configured", ErrProviderUnavailable)
+	}
+	if explicit := normaliseProvider(requested); explicit != "" {
+		prov, err := s.adapter(ctx, product.ID, explicit)
+		if err != nil {
+			return "", nil, nil, fmt.Errorf("%w: %w", ErrProviderUnavailable, err)
 		}
+		price, err := s.Store.ResolvePlanPrice(ctx, plan.ID, explicit, settlementCurrency, plan.BillingInterval)
+		if err != nil {
+			return "", nil, nil, fmt.Errorf("%w: %w", ErrPlanNotSellable, err)
+		}
+		return explicit, prov, price, nil
 	}
-	if name == "" {
-		name = defaultProvider
+
+	var lastErr error
+	priced := false
+	for _, name := range s.providerCandidates(ctx) {
+		price, err := s.Store.ResolvePlanPrice(ctx, plan.ID, name, settlementCurrency, plan.BillingInterval)
+		if errors.Is(err, store.ErrPriceNotConfigured) {
+			continue
+		}
+		if err != nil {
+			// A database failure is not a sellability answer.
+			return "", nil, nil, err
+		}
+		priced = true
+		prov, err := s.adapter(ctx, product.ID, name)
+		if err != nil {
+			// Priced but unusable (disabled, missing credentials): the
+			// next candidate may serve, so keep looking.
+			lastErr = err
+			continue
+		}
+		return name, prov, price, nil
 	}
-	return name
+	if priced && lastErr != nil {
+		return "", nil, nil, fmt.Errorf("%w: %w", ErrProviderUnavailable, lastErr)
+	}
+	return "", nil, nil, fmt.Errorf("%w: %w", ErrPlanNotSellable, store.ErrPriceNotConfigured)
+}
+
+// adapter resolves one provider name through the factory, rejecting a
+// nil adapter as unavailable rather than dereferencing it later.
+func (s *Service) adapter(ctx context.Context, productID, name string) (provider.Provider, error) {
+	prov, _, err := s.Providers(ctx, productID, name)
+	if err != nil {
+		return nil, err
+	}
+	if prov == nil {
+		return nil, fmt.Errorf("provider %q resolved to no adapter", name)
+	}
+	return prov, nil
+}
+
+// providerCandidates returns the configured default (when set) followed
+// by the supported providers in priority order, without duplicates.
+func (s *Service) providerCandidates(ctx context.Context) []string {
+	candidates := make([]string, 0, len(providerPriority)+1)
+	seen := make(map[string]bool, len(providerPriority)+1)
+	add := func(name string) {
+		name = normaliseProvider(name)
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		candidates = append(candidates, name)
+	}
+	if def, err := s.Store.GetSetting(ctx, "payment_default_provider"); err == nil {
+		add(def)
+	}
+	for _, name := range providerPriority {
+		add(name)
+	}
+	return candidates
+}
+
+func normaliseProvider(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// orderSubtotal multiplies a unit price by a validated quantity without
+// wrapping. A negative or overflowing product is ErrQuantityInvalid: the
+// order would otherwise snapshot a total the buyer never sees.
+func orderSubtotal(unitMinor int64, quantity int) (int64, error) {
+	if unitMinor < 0 {
+		return 0, fmt.Errorf("%w: the plan price is negative", ErrPlanNotSellable)
+	}
+	q := int64(quantity)
+	if q < 1 {
+		return 0, fmt.Errorf("%w: quantity must be positive", ErrQuantityInvalid)
+	}
+	if unitMinor != 0 && unitMinor > math.MaxInt64/q {
+		return 0, fmt.Errorf("%w: quantity %d overflows the order total", ErrQuantityInvalid, quantity)
+	}
+	subtotal := unitMinor * q
+	if unitMinor != 0 && subtotal/unitMinor != q {
+		return 0, fmt.Errorf("%w: quantity %d overflows the order total", ErrQuantityInvalid, quantity)
+	}
+	if subtotal > maxOrderTotalMinor {
+		return 0, fmt.Errorf("%w: order total %d exceeds the supported maximum", ErrQuantityInvalid, subtotal)
+	}
+	return subtotal, nil
 }
 
 func (s *Service) orderTTL(ctx context.Context) time.Duration {

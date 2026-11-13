@@ -201,6 +201,13 @@ func (h *PaymentsAPIHandler) orderInScope(c *gin.Context) (*model.PaymentOrder, 
 
 func writeCheckoutError(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, checkout.ErrQuantityInvalid):
+		response.Err(c, http.StatusBadRequest, "INVALID_QUANTITY", err.Error())
+	case errors.Is(err, checkout.ErrProviderError):
+		// The request was valid; the provider API failed while creating
+		// the instruction. The order stays pending, so a retry is safe.
+		response.Err(c, http.StatusBadGateway, "PAYMENT_PROVIDER_ERROR",
+			"the payment provider could not create the payment instruction")
 	case errors.Is(err, checkout.ErrProviderUnavailable):
 		response.Err(c, http.StatusServiceUnavailable, "PAYMENT_PROVIDER_DISABLED", err.Error())
 	case errors.Is(err, store.ErrPriceNotConfigured), errors.Is(err, checkout.ErrPlanNotSellable):

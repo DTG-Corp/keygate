@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -409,10 +410,10 @@ func TestCreateOrderAPIValidationErrors(t *testing.T) {
 			body: `{"email":"` + email + `"}`, status: http.StatusBadRequest, code: "BAD_REQUEST",
 		},
 		"no price": {
-			body: `{"plan_id":"` + f.planA.ID + `","email":"` + email + `","provider":"sepay"}`, status: http.StatusUnprocessableEntity, code: "PAYMENT_PRICE_NOT_CONFIGURED",
+			body: `{"plan_id":"` + f.planA.ID + `","email":"` + email + `","provider":"sepay","quantity":1}`, status: http.StatusUnprocessableEntity, code: "PAYMENT_PRICE_NOT_CONFIGURED",
 		},
 		"unknown plan": {
-			body: `{"plan_id":"does-not-exist","email":"` + email + `","provider":"sepay"}`, status: http.StatusUnprocessableEntity, code: "PAYMENT_PRICE_NOT_CONFIGURED",
+			body: `{"plan_id":"does-not-exist","email":"` + email + `","provider":"sepay","quantity":1}`, status: http.StatusUnprocessableEntity, code: "PAYMENT_PRICE_NOT_CONFIGURED",
 		},
 	}
 	for name, tt := range tests {
@@ -430,9 +431,59 @@ func TestCreateOrderProviderUnavailable(t *testing.T) {
 	key := f.key(t, model.ScopePaymentsWrite)
 
 	code, out := f.call(f.api.Create, http.MethodPost, "/api/v1/payments/orders",
-		`{"plan_id":"`+f.planA.ID+`","email":"`+f.email("unavailable")+`","provider":"sepay"}`, key)
+		`{"plan_id":"`+f.planA.ID+`","email":"`+f.email("unavailable")+`","provider":"sepay","quantity":1}`, key)
 	if code != http.StatusServiceUnavailable || errCode(out) != "PAYMENT_PROVIDER_DISABLED" {
 		t.Fatalf("status = %d %v, want 503 PAYMENT_PROVIDER_DISABLED", code, out)
+	}
+}
+
+// A provider that is configured but fails while creating the payment
+// instruction is a bad gateway, not an internal error: the request was
+// valid and the upstream is at fault.
+func TestCreateOrderProviderFailure(t *testing.T) {
+	f := newPaymentsFixture(t)
+	f.price(t, f.planA, "sepay", 1_190_000)
+	f.fp.CreateFn = func(context.Context, provider.CreateAttemptRequest) (provider.CreateAttemptResult, error) {
+		return provider.CreateAttemptResult{}, errors.New("provider gateway exploded")
+	}
+	key := f.key(t, model.ScopePaymentsWrite)
+	email := f.email("provider-down")
+
+	code, out := f.call(f.api.Create, http.MethodPost, "/api/v1/payments/orders",
+		`{"plan_id":"`+f.planA.ID+`","email":"`+email+`","provider":"sepay","quantity":1}`, key)
+	if code != http.StatusBadGateway || errCode(out) != "PAYMENT_PROVIDER_ERROR" {
+		t.Fatalf("status = %d %v, want 502 PAYMENT_PROVIDER_ERROR", code, out)
+	}
+	// The order stays pending so the caller can retry; no buyer-facing
+	// error body leaks the provider's message.
+	if e, _ := out["error"].(map[string]any); strings.Contains(e["message"].(string), "exploded") {
+		t.Fatalf("error message leaked provider detail: %v", e)
+	}
+	if n := f.orderCount(email); n != 1 {
+		t.Fatalf("orders = %d, want the pending order kept for retry", n)
+	}
+}
+
+// Quantity is validated before anything is written: zero (including an
+// omitted field), negatives and runaway volumes are 400s, not orders.
+func TestCreateOrderAPIRejectsInvalidQuantity(t *testing.T) {
+	f := newPaymentsFixture(t)
+	f.price(t, f.planA, "sepay", 1_190_000)
+	key := f.key(t, model.ScopePaymentsWrite)
+	email := f.email("bad-qty")
+
+	for name, body := range map[string]string{
+		"zero":       `{"plan_id":"` + f.planA.ID + `","email":"` + email + `","provider":"sepay","quantity":0}`,
+		"negative":   `{"plan_id":"` + f.planA.ID + `","email":"` + email + `","provider":"sepay","quantity":-1}`,
+		"over limit": `{"plan_id":"` + f.planA.ID + `","email":"` + email + `","provider":"sepay","quantity":101}`,
+	} {
+		code, out := f.call(f.api.Create, http.MethodPost, "/api/v1/payments/orders", body, key)
+		if code != http.StatusBadRequest || errCode(out) != "INVALID_QUANTITY" {
+			t.Errorf("%s = %d %v, want 400 INVALID_QUANTITY", name, code, out)
+		}
+	}
+	if n := f.orderCount(email); n != 0 {
+		t.Fatalf("orders = %d, want 0", n)
 	}
 }
 
@@ -457,7 +508,7 @@ func TestCreateOrderAPIProductScope(t *testing.T) {
 	// them.
 	system := f.key(t, model.ScopePaymentsWrite)
 	code, out = f.call(f.api.Create, http.MethodPost, "/api/v1/payments/orders",
-		`{"plan_id":"`+f.planB.ID+`","email":"`+email+`","provider":"sepay"}`, system)
+		`{"plan_id":"`+f.planB.ID+`","email":"`+email+`","provider":"sepay","quantity":1}`, system)
 	if code != http.StatusCreated {
 		t.Fatalf("system key create = %d %v, want 201", code, out)
 	}
@@ -651,7 +702,7 @@ func TestPaymentsAPIScopeEnforcement(t *testing.T) {
 	read.GET("/orders/:code", f.api.Get)
 	read.GET("/orders", f.api.List)
 
-	body := `{"plan_id":"` + f.planA.ID + `","email":"` + f.email("scope") + `","provider":"sepay"}`
+	body := `{"plan_id":"` + f.planA.ID + `","email":"` + f.email("scope") + `","provider":"sepay","quantity":1}`
 	send := func(rawKey, method, path, payload string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(method, path, strings.NewReader(payload))

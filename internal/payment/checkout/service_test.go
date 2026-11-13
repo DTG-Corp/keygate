@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +164,71 @@ func TestCreateOrderQuantityMultipliesPrice(t *testing.T) {
 	}
 }
 
+// A licence volume is bounded: zero, negative and runaway quantities are
+// refused before any order or provider call exists. 2^60 would otherwise
+// wrap the subtotal to a handful of dong and hand the buyer a licence
+// for nothing.
+func TestCreateOrderRejectsInvalidQuantity(t *testing.T) {
+	f := newFixture(t, true)
+	f.price("sepay", 1_190_000)
+	fp := fake.New("sepay")
+	fac := newFactory(fp)
+	svc := &checkout.Service{Store: f.s, Providers: fac.providerFactory()}
+	email := f.email("qty-invalid")
+
+	for _, quantity := range []int{0, -1, checkout.MaxQuantity + 1, 1 << 60} {
+		_, err := svc.CreateOrder(f.ctx, checkout.CreateOrderInput{
+			PlanID: f.plan.ID, Email: email, Provider: "sepay", Quantity: quantity,
+		})
+		if !errors.Is(err, checkout.ErrQuantityInvalid) {
+			t.Errorf("quantity %d: err = %v, want ErrQuantityInvalid", quantity, err)
+		}
+	}
+	if len(fac.calls) != 0 || len(fp.Calls) != 0 {
+		t.Fatalf("provider called for an invalid quantity: factory %v, provider %+v", fac.calls, fp.Calls)
+	}
+	if n := f.orderCount(strings.ToLower(email)); n != 0 {
+		t.Fatalf("orders = %d, want 0", n)
+	}
+
+	// The documented cap itself is sellable.
+	res, err := svc.CreateOrder(f.ctx, checkout.CreateOrderInput{
+		PlanID: f.plan.ID, Email: f.email("qty-max"), Provider: "sepay", Quantity: checkout.MaxQuantity,
+	})
+	if err != nil {
+		t.Fatalf("quantity %d: %v", checkout.MaxQuantity, err)
+	}
+	if res.Order.Quantity != checkout.MaxQuantity {
+		t.Fatalf("quantity = %d, want %d", res.Order.Quantity, checkout.MaxQuantity)
+	}
+}
+
+// A price that cannot be multiplied safely is refused, not wrapped into
+// a tiny total the customer could pay.
+func TestCreateOrderRejectsOverflowingTotal(t *testing.T) {
+	f := newFixture(t, true)
+	if _, err := f.s.UpsertPlanPrice(f.ctx, f.plan.ID, store.PlanPriceInput{
+		Provider: "sepay", Currency: "VND", AmountMinor: math.MaxInt64/2 + 1,
+	}); err != nil {
+		t.Fatalf("upsert huge price: %v", err)
+	}
+	fp := fake.New("sepay")
+	svc := &checkout.Service{Store: f.s, Providers: newFactory(fp).providerFactory()}
+
+	_, err := svc.CreateOrder(f.ctx, checkout.CreateOrderInput{
+		PlanID: f.plan.ID, Email: f.email("overflow"), Provider: "sepay", Quantity: 3,
+	})
+	if !errors.Is(err, checkout.ErrQuantityInvalid) {
+		t.Fatalf("err = %v, want ErrQuantityInvalid", err)
+	}
+	if len(fp.Calls) != 0 {
+		t.Fatalf("provider called for an overflowing total: %+v", fp.Calls)
+	}
+	if n := f.orderCount(f.email("overflow")); n != 0 {
+		t.Fatalf("orders = %d, want 0", n)
+	}
+}
+
 func TestCreateOrderRejectsMissingPrice(t *testing.T) {
 	f := newFixture(t, true)
 	fp := fake.New("sepay")
@@ -303,6 +369,101 @@ func TestCreateOrderProviderUnavailable(t *testing.T) {
 	}
 }
 
+// An install that only sells through PayOS has no install-wide default
+// and no SePay price: checkout must discover the one provider that can
+// actually serve the plan instead of hardcoding sepay.
+func TestCreateOrderFallsBackToPricedProvider(t *testing.T) {
+	f := newFixture(t, true)
+	f.clearSetting("payment_default_provider")
+	f.price("payos", 1_190_000)
+	fac := newFactory(fake.New("payos"))
+	svc := &checkout.Service{Store: f.s, Providers: fac.providerFactory()}
+
+	res, err := svc.CreateOrder(f.ctx, checkout.CreateOrderInput{
+		PlanID: f.plan.ID, Email: f.email("payos-only"), Quantity: 1,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if res.Order.Provider != "payos" || res.Attempt.Provider != "payos" {
+		t.Fatalf("provider = %q/%q, want payos", res.Order.Provider, res.Attempt.Provider)
+	}
+	if res.Order.TotalMinor != 1_190_000 {
+		t.Fatalf("total = %d, want the payos price", res.Order.TotalMinor)
+	}
+	if len(fac.calls) != 1 || fac.calls[0] != f.product.ID+"/payos" {
+		t.Fatalf("factory calls = %v, want only the priced provider", fac.calls)
+	}
+}
+
+// The configured default wins when both providers are priced and
+// configured, even though sepay comes first in the fallback order.
+func TestCreateOrderDefaultProviderWinsWhenBothPriced(t *testing.T) {
+	f := newFixture(t, true)
+	f.price("sepay", 100_000)
+	f.price("payos", 200_000)
+	f.setSetting("payment_default_provider", "payos")
+	fac := newFactory(fake.New("payos"))
+	svc := &checkout.Service{Store: f.s, Providers: fac.providerFactory()}
+
+	res, err := svc.CreateOrder(f.ctx, checkout.CreateOrderInput{
+		PlanID: f.plan.ID, Email: f.email("default-both"), Quantity: 1,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if res.Order.Provider != "payos" || res.Order.TotalMinor != 200_000 {
+		t.Fatalf("order = %q/%d, want the configured payos price", res.Order.Provider, res.Order.TotalMinor)
+	}
+	if len(fac.calls) != 1 || fac.calls[0] != f.product.ID+"/payos" {
+		t.Fatalf("factory calls = %v, want only payos", fac.calls)
+	}
+}
+
+// With no setting, the first provider in priority order that has a
+// price and a usable config wins: sepay before payos.
+func TestCreateOrderFirstPricedProviderWithoutDefault(t *testing.T) {
+	f := newFixture(t, true)
+	f.clearSetting("payment_default_provider")
+	f.price("sepay", 100_000)
+	f.price("payos", 200_000)
+	fac := newFactory(fake.New("sepay"))
+	svc := &checkout.Service{Store: f.s, Providers: fac.providerFactory()}
+
+	res, err := svc.CreateOrder(f.ctx, checkout.CreateOrderInput{
+		PlanID: f.plan.ID, Email: f.email("first-priced"), Quantity: 1,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if res.Order.Provider != "sepay" || res.Order.TotalMinor != 100_000 {
+		t.Fatalf("order = %q/%d, want the first priced sepay", res.Order.Provider, res.Order.TotalMinor)
+	}
+	if len(fac.calls) != 1 || fac.calls[0] != f.product.ID+"/sepay" {
+		t.Fatalf("factory calls = %v, want sepay first", fac.calls)
+	}
+}
+
+// A default provider with no price for this plan is not sellable; the
+// fallback still finds the one that is.
+func TestCreateOrderUnpricedDefaultFallsBack(t *testing.T) {
+	f := newFixture(t, true)
+	f.setSetting("payment_default_provider", "payos")
+	f.price("sepay", 100_000)
+	fac := newFactory(fake.New("sepay"))
+	svc := &checkout.Service{Store: f.s, Providers: fac.providerFactory()}
+
+	res, err := svc.CreateOrder(f.ctx, checkout.CreateOrderInput{
+		PlanID: f.plan.ID, Email: f.email("unpriced-default"), Quantity: 1,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if res.Order.Provider != "sepay" {
+		t.Fatalf("provider = %q, want the priced sepay", res.Order.Provider)
+	}
+}
+
 // A retried create must hand back the same order and the same QR: PayOS
 // would reject a second link for one orderCode, and a second QR for one
 // bank transfer confuses the payer.
@@ -355,6 +516,8 @@ func TestCreateOrderProviderFailureMarksAttemptFailed(t *testing.T) {
 
 	if _, err := svc.CreateOrder(f.ctx, in); err == nil {
 		t.Fatal("create succeeded while the provider was down")
+	} else if !errors.Is(err, checkout.ErrProviderError) {
+		t.Fatalf("err = %v, want ErrProviderError", err)
 	}
 
 	order := f.onlyOrder(strings.ToLower(in.Email))
@@ -544,4 +707,23 @@ func (f *fixture) onlyOrder(email string) *model.PaymentOrder {
 		f.t.Fatalf("read order: %v", err)
 	}
 	return order
+}
+
+// setSetting writes one install setting and removes it again when the
+// test ends: the integration database outlives one run and a leftover
+// default provider would steer every later test in this package.
+func (f *fixture) setSetting(key, value string) {
+	f.t.Helper()
+	if err := f.s.SetSetting(f.ctx, key, value); err != nil {
+		f.t.Fatalf("set setting %q: %v", key, err)
+	}
+	f.t.Cleanup(func() { f.clearSetting(key) })
+}
+
+func (f *fixture) clearSetting(key string) {
+	f.t.Helper()
+	if _, err := f.s.DB.NewDelete().Model((*store.Setting)(nil)).
+		Where("key = ?", key).Exec(f.ctx); err != nil {
+		f.t.Fatalf("clear setting %q: %v", key, err)
+	}
 }
