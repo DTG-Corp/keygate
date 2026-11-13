@@ -1121,6 +1121,15 @@ const (
 	EventReleasePublished        = "release.published"
 	EventReleaseYanked           = "release.yanked"
 	EventReleaseUnyanked         = "release.unyanked"
+
+	// Payment events (phase 1a, spec §11). These are the only four the
+	// VN rails emit: an order was opened, an order was paid, and the
+	// provider-side payment succeeded or failed. The expired/canceled/
+	// refunded order events belong to phase 1b.
+	EventOrderCreated     = "order.created"
+	EventOrderPaid        = "order.paid"
+	EventPaymentSucceeded = "payment.succeeded"
+	EventPaymentFailed    = "payment.failed"
 )
 
 // WebhookEvents is every event a webhook can subscribe to. Delivery
@@ -1134,6 +1143,7 @@ var WebhookEvents = []string{
 	EventLicenseRevoked, EventLicensePaymentFailed, EventLicensePaymentRecovered,
 	EventLicenseQuantityChanged, EventQuotaWarning, EventQuotaExceeded,
 	EventSeatAdded, EventSeatRemoved, EventPlanChanged, EventReleasePublished, EventReleaseYanked, EventReleaseUnyanked,
+	EventOrderCreated, EventOrderPaid, EventPaymentSucceeded, EventPaymentFailed,
 }
 
 // IsValidWebhookEvent reports whether e is in WebhookEvents.
