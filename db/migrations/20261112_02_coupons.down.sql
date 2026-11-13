@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS coupon_scopes;
+DROP TABLE IF EXISTS coupons;

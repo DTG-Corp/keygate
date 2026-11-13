@@ -170,6 +170,12 @@ type Product struct {
 	// is refused until that cache has drained.
 	FeedGatedAt *time.Time `json:"feed_gated_at,omitempty"`
 
+	// TaxRateBP is the VAT rate in basis points (1000 = 10%) used when
+	// a VN payment order is priced. PriceIncludesTax says whether the
+	// plan's listed price already contains that tax.
+	TaxRateBP        int  `bun:",notnull" json:"tax_rate_bp"`
+	PriceIncludesTax bool `bun:",notnull" json:"price_includes_tax"`
+
 	CreatedAt time.Time `bun:",nullzero,default:now()" json:"created_at"`
 }
 
@@ -844,6 +850,7 @@ type LicenseRenewal struct {
 
 	ID                      string     `bun:",pk" json:"id"`
 	LicenseID               string     `bun:",notnull" json:"license_id"`
+	PaymentOrderID          string     `bun:",nullzero" json:"payment_order_id,omitempty"`
 	StripeCheckoutSessionID string     `bun:",notnull,default:''" json:"stripe_checkout_session_id,omitempty"`
 	StripePaymentIntentID   string     `bun:",notnull,default:''" json:"stripe_payment_intent_id,omitempty"`
 	Days                    int        `bun:",notnull" json:"days"`
@@ -880,6 +887,7 @@ type LicenseUpgrade struct {
 
 	ID                      string     `bun:",pk" json:"id"`
 	LicenseID               string     `bun:",notnull" json:"license_id"`
+	PaymentOrderID          string     `bun:",nullzero" json:"payment_order_id,omitempty"`
 	ToPlanID                string     `bun:",nullzero" json:"to_plan_id,omitempty"`
 	State                   string     `bun:",notnull" json:"state"`
 	StripeCheckoutSessionID string     `bun:",notnull" json:"stripe_checkout_session_id"`
