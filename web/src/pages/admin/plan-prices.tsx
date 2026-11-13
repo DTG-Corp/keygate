@@ -60,6 +60,7 @@ export default function PlanPricesPage() {
   const { id = "" } = useParams<{ id: string }>()
   const [editor, setEditor] = useState<PriceForm | null>(null)
   const [formError, setFormError] = useState("")
+  const [amountError, setAmountError] = useState("")
   const [deleting, setDeleting] = useState<PlanPriceRow | null>(null)
 
   const planQuery = useQuery({
@@ -109,6 +110,7 @@ export default function PlanPricesPage() {
 
   const openEdit = (row: PlanPriceRow) => {
     setFormError("")
+    setAmountError("")
     setEditor({
       provider: row.provider === "payos" ? "payos" : "sepay",
       currency: row.currency,
@@ -120,6 +122,15 @@ export default function PlanPricesPage() {
   const save = () => {
     if (!editor) return
     setFormError("")
+    // Parse before the PUT: an unparseable amount must never reach the
+    // API as NaN, and a fraction typed for a 0-exponent currency must be
+    // refused instead of silently recorded at the wrong scale.
+    const amount = parseAmountToMinor(editor.amount, currencyExponent(editor.currency))
+    if (amount === null || amount < 0) {
+      setAmountError(t("admin.amount_invalid"))
+      return
+    }
+    setAmountError("")
     saveMut.mutate(editor)
   }
 
@@ -162,6 +173,7 @@ export default function PlanPricesPage() {
           <Button
             onClick={() => {
               setFormError("")
+              setAmountError("")
               setEditor(emptyForm())
             }}
           >
@@ -253,6 +265,7 @@ export default function PlanPricesPage() {
           if (!open) {
             setEditor(null)
             setFormError("")
+            setAmountError("")
           }
         }}
       >
@@ -283,7 +296,13 @@ export default function PlanPricesPage() {
                   </div>
                   <div className="space-y-2">
                     <Label>{t("admin.price_currency")}</Label>
-                    <Select value={editor.currency} onValueChange={(currency) => setEditor({ ...editor, currency })}>
+                    <Select
+                      value={editor.currency}
+                      onValueChange={(currency) => {
+                        setAmountError("")
+                        setEditor({ ...editor, currency })
+                      }}
+                    >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
@@ -301,11 +320,22 @@ export default function PlanPricesPage() {
                     <Input
                       id="price-amount"
                       value={editor.amount}
-                      onChange={(e) => setEditor({ ...editor, amount: e.target.value })}
+                      onChange={(e) => {
+                        setAmountError("")
+                        setEditor({ ...editor, amount: e.target.value })
+                      }}
                       inputMode="decimal"
                       placeholder="1.190.000"
+                      aria-invalid={!!amountError}
+                      aria-describedby={amountError ? "price-amount-error" : undefined}
                     />
-                    <p className="text-xs text-muted-foreground">{t("admin.price_exponent_hint")}</p>
+                    {amountError ? (
+                      <p id="price-amount-error" role="alert" className="text-xs text-destructive">
+                        {amountError}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">{t("admin.price_exponent_hint")}</p>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <Label>{t("admin.price_interval")}</Label>

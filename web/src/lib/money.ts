@@ -6,34 +6,14 @@
 // division would turn 1190000 ₫ into 11900 ₫. The exponent is data, not
 // an assumption.
 
+// Mirrors internal/payment/domain/money.go CurrencyExponent exactly:
+// the backend returns 0 for VND, JPY and KRW and 2 for everything else.
+// A currency it does not list must not be given a richer exponent here,
+// or the fallback would format an amount the server stores differently.
 const CURRENCY_EXPONENTS: Record<string, number> = {
   VND: 0,
   JPY: 0,
   KRW: 0,
-  KHR: 0,
-  LAK: 0,
-  MMK: 0,
-  IDR: 0,
-  CLP: 0,
-  ISK: 0,
-  HUF: 0,
-  TWD: 0,
-  USD: 2,
-  EUR: 2,
-  GBP: 2,
-  AUD: 2,
-  CAD: 2,
-  SGD: 2,
-  THB: 2,
-  MYR: 2,
-  PHP: 2,
-  CNY: 2,
-  INR: 2,
-  BHD: 3,
-  JOD: 3,
-  KWD: 3,
-  OMR: 3,
-  TND: 3,
 }
 
 // currencyExponent is the number of minor-unit digits a currency has.
@@ -105,6 +85,13 @@ export function formatAmountInput(minor: number, exponent: number): string {
 // grouping. A lone separator followed by exactly `exponent` digits is
 // decimal (1,23 in a 2-digit currency); three digits after a lone
 // separator can only be grouping (1.234 = 1234).
+//
+// An exponent-0 currency has no fraction at all, so a separator can only
+// be a grouping mark. Accepting a decimal tail there would be the worst
+// of both worlds: stripping every separator turns "1.190.000,50" into
+// 119000050, one hundred times the amount. Only plain digits or a valid
+// vi-VN grouping pattern are accepted; anything that looks like a
+// fraction returns null so the caller shows an error instead.
 export function parseAmountToMinor(raw: string, exponent: number): number | null {
   const exp = Math.max(0, Math.trunc(normaliseExponent(exponent, "VND")))
   let text = raw.trim().replace(/\s/g, "")
@@ -118,25 +105,30 @@ export function parseAmountToMinor(raw: string, exponent: number): number | null
   text = text.replace(/[^\d.,]/g, "")
   if (!text || !/\d/.test(text)) return null
 
+  if (exp === 0) {
+    if (!/^\d+$/.test(text) && !/^\d{1,3}(?:[.,]\d{3})+$/.test(text)) return null
+    const minor = Number(text.replace(/[.,]/g, ""))
+    if (!Number.isSafeInteger(minor)) return null
+    return negative ? -minor : minor
+  }
+
   let whole = text
   let fraction = ""
 
-  if (exp > 0) {
-    const lastDot = text.lastIndexOf(".")
-    const lastComma = text.lastIndexOf(",")
-    const lastSep = Math.max(lastDot, lastComma)
-    if (lastSep >= 0) {
-      const head = text.slice(0, lastSep)
-      const tail = text.slice(lastSep + 1)
-      const dots = (text.match(/\./g) || []).length
-      const commas = (text.match(/,/g) || []).length
-      const bothKinds = dots > 0 && commas > 0
-      const repeated = dots + commas > 1
-      const decimal = tail.length > 0 && tail.length <= exp && (bothKinds || !repeated || tail.length === exp)
-      if (decimal) {
-        whole = head
-        fraction = tail.padEnd(exp, "0").slice(0, exp)
-      }
+  const lastDot = text.lastIndexOf(".")
+  const lastComma = text.lastIndexOf(",")
+  const lastSep = Math.max(lastDot, lastComma)
+  if (lastSep >= 0) {
+    const head = text.slice(0, lastSep)
+    const tail = text.slice(lastSep + 1)
+    const dots = (text.match(/\./g) || []).length
+    const commas = (text.match(/,/g) || []).length
+    const bothKinds = dots > 0 && commas > 0
+    const repeated = dots + commas > 1
+    const decimal = tail.length > 0 && tail.length <= exp && (bothKinds || !repeated || tail.length === exp)
+    if (decimal) {
+      whole = head
+      fraction = tail.padEnd(exp, "0").slice(0, exp)
     }
   }
 

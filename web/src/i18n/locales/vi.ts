@@ -87,6 +87,7 @@ const vi = {
   "pay.canceled_hint": "Đơn đã huỷ. Vui lòng tạo đơn mới nếu bạn vẫn muốn mua.",
   "pay.checkout_hint": "Bạn sẽ được chuyển đến cổng thanh toán an toàn của PayOS.",
   "pay.countdown_expired": "Đã hết hạn",
+  "pay.stale_warning": "Không cập nhật được trạng thái thanh toán. Đang hiển thị dữ liệu gần nhất; sẽ tự thử lại.",
 
   // Admin navigation and page chrome
   "admin.payments": "Thanh toán",

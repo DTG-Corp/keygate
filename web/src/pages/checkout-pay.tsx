@@ -43,7 +43,7 @@ export default function CheckoutPayPage() {
           </div>
         )}
 
-        {error && (
+        {error && !data && (
           <Card>
             <CardContent className="space-y-4 py-10 text-center">
               <XCircle className="mx-auto h-10 w-10 text-destructive" />
@@ -57,7 +57,15 @@ export default function CheckoutPayPage() {
           </Card>
         )}
 
-        {data && !error && <PayOrder data={data} />}
+        {/* A failed poll must not blank an order the buyer is already
+            looking at: keep the last status on screen and warn instead. */}
+        {data && error && (
+          <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            {t("pay.stale_warning")}
+          </p>
+        )}
+
+        {data && <PayOrder data={data} />}
       </main>
 
       {/* Attribution required by AGPL v3 Section 7(b) — see NOTICE */}
@@ -81,6 +89,12 @@ function PayOrder({ data }: { data: PayStatus }) {
   const subtotal =
     data.subtotal_minor ?? (data.tax_minor !== undefined ? data.amount_minor - data.tax_minor : undefined)
   const qrImage = safeImageURL(data.qr_image_url)
+  // checkout_url comes from the provider's API response, not from us:
+  // validate it before it reaches an href. Only an https URL on a host
+  // the checkout rail actually returns is offered; anything else is
+  // treated as absent, so the button disappears instead of redirecting
+  // the buyer to an untrusted origin.
+  const checkoutURL = safeCheckoutURL(data.checkout_url)
   const vatLabel =
     data.tax_rate_bp && data.tax_rate_bp > 0
       ? `${t("pay.vat")} (${(data.tax_rate_bp / 100).toLocaleString("vi-VN")}%)`
@@ -140,7 +154,7 @@ function PayOrder({ data }: { data: PayStatus }) {
           <CardContent className="space-y-4 pt-6">
             <p className="text-sm text-muted-foreground">{qrImage ? t("pay.qr_hint") : t("pay.checkout_hint")}</p>
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              {data.checkout_url ? t("pay.gateway") : t("pay.bank_transfer")}
+              {checkoutURL ? t("pay.gateway") : t("pay.bank_transfer")}
             </p>
 
             {qrImage && (
@@ -174,9 +188,9 @@ function PayOrder({ data }: { data: PayStatus }) {
               <p className="rounded-md bg-amber-50 p-3 text-xs text-amber-800">{t("pay.transfer_warning")}</p>
             )}
 
-            {data.checkout_url && (
+            {checkoutURL && (
               <Button asChild className="w-full">
-                <a href={data.checkout_url} target="_blank" rel="noopener noreferrer">
+                <a href={checkoutURL} target="_blank" rel="noopener noreferrer">
                   <ExternalLink className="h-4 w-4" /> {t("pay.pay_now")}
                 </a>
               </Button>
@@ -294,11 +308,60 @@ function CopyButton({ value }: { value: string }) {
   )
 }
 
+// Redirects and QR images are values we did not build: the provider
+// returned them. Allowlists keep a compromised or misconfigured provider
+// payload from turning the public pay page into an open redirect or an
+// image beacon to an arbitrary origin.
+//
+// Native checkout host only: the PayOS adapter forwards the checkoutUrl
+// from PayOS's API (https://pay.payos.vn/web/...); SePay returns no
+// checkout URL at all. Anything else is hidden.
+const CHECKOUT_HOSTS = ["pay.payos.vn"]
+// SePay builds its VietQR image on this host
+// (internal/payment/providers/sepay/qr.go). PayOS returns an EMVCo
+// payload, not an image URL, so it never reaches this list.
+const IMAGE_HOSTS = ["vietqr.app"]
+
+// allowedHTTPSURL accepts only an absolute https URL whose hostname is
+// exactly one of `hosts`. A relative value, a protocol-relative value
+// and anything carrying credentials or a lookalike host are rejected.
+function allowedHTTPSURL(value: string, hosts: readonly string[]): string | undefined {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return undefined
+  }
+  if (url.protocol !== "https:") return undefined
+  const host = url.hostname.toLowerCase()
+  return hosts.includes(host) ? url.toString() : undefined
+}
+
+// sameOriginPath accepts a single-slash absolute path on this site.
+// "//host/path" is a protocol-relative URL, not a local path: it must be
+// rejected before the URL parser resolves it, or the other host wins.
+function sameOriginPath(value: string): string | undefined {
+  if (!value.startsWith("/") || value.startsWith("//")) return undefined
+  try {
+    const url = new URL(value, window.location.origin)
+    if (url.origin !== window.location.origin) return undefined
+    return `${url.pathname}${url.search}${url.hash}`
+  } catch {
+    return undefined
+  }
+}
+
+function safeCheckoutURL(value?: string): string | undefined {
+  if (!value) return undefined
+  return allowedHTTPSURL(value, CHECKOUT_HOSTS)
+}
+
 // The API's qr_image_url is renderable for SePay. PayOS stores its raw
 // EMVCo payload in the same field, which is an <img> broken-image icon,
-// not a QR; only a URL-like value is put in src and the page falls back
-// to the checkout button otherwise.
+// not a QR; only a same-origin absolute path or an https URL on an
+// allowed image host is put in src, and the page falls back to the
+// checkout button otherwise.
 function safeImageURL(value?: string): string | undefined {
   if (!value) return undefined
-  return /^(https?:\/\/|\/|data:image\/)/i.test(value) ? value : undefined
+  return sameOriginPath(value) ?? allowedHTTPSURL(value, IMAGE_HOSTS)
 }

@@ -91,7 +91,6 @@ export default function PaymentOrdersPage() {
   const [refundOpen, setRefundOpen] = useState(false)
   const [refundAmount, setRefundAmount] = useState("")
   const [refundReason, setRefundReason] = useState("")
-  const [refundMethod, setRefundMethod] = useState("manual")
   const [actionError, setActionError] = useState("")
 
   const order = detail.data?.order
@@ -123,11 +122,14 @@ export default function PaymentOrdersPage() {
     onError: (e: Error) => setActionError(e.message),
   })
   const refundMut = useMutation({
-    mutationFn: (body: { code: string; amount_minor: number; reason: string; method: string }) =>
+    // Phase 1a refunds are manual: the operator transfers the money back
+    // and records it. RefundOrder refuses any other method, so the UI
+    // does not offer one.
+    mutationFn: (body: { code: string; amount_minor: number; reason: string }) =>
       adminPayments.refund(body.code, {
         amount_minor: body.amount_minor,
         reason: body.reason,
-        method: body.method,
+        method: "manual",
       }),
     onSuccess: () => {
       refresh()
@@ -148,7 +150,6 @@ export default function PaymentOrdersPage() {
     if (!order) return
     setRefundAmount(formatAmountInput(Math.max(0, order.total_minor - refundedMinor), order.currency_exponent))
     setRefundReason("")
-    setRefundMethod("manual")
     setActionError("")
     setRefundOpen(true)
   }
@@ -172,7 +173,6 @@ export default function PaymentOrdersPage() {
       code: order.code,
       amount_minor: parsed,
       reason: refundReason.trim(),
-      method: refundMethod,
     })
   }
 
@@ -505,19 +505,6 @@ export default function PaymentOrdersPage() {
                 onChange={(e) => setRefundAmount(e.target.value)}
                 inputMode="decimal"
               />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="refund-method">{t("admin.refund_method")}</Label>
-              <Select value={refundMethod} onValueChange={setRefundMethod}>
-                <SelectTrigger id="refund-method">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="manual">{t("admin.method_manual")}</SelectItem>
-                  <SelectItem value="bank_transfer">{t("admin.method_bank_transfer")}</SelectItem>
-                  <SelectItem value="cash">{t("admin.method_cash")}</SelectItem>
-                </SelectContent>
-              </Select>
             </div>
             <div className="space-y-2">
               <Label htmlFor="refund-reason">{t("admin.refund_reason")}</Label>

@@ -1195,6 +1195,7 @@ const zh = {
   "pay.canceled_hint": "该订单已取消。如仍想购买，请重新下单。",
   "pay.checkout_hint": "您将跳转到 PayOS 的安全收银台。",
   "pay.countdown_expired": "已过期",
+  "pay.stale_warning": "无法刷新支付状态。正在显示上次的数据，将自动重试。",
 
   // Payments (admin)
   "admin.payments": "支付",

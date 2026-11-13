@@ -1250,6 +1250,7 @@ const en = {
   "pay.canceled_hint": "This order was canceled. Create a new one if you still want to buy.",
   "pay.checkout_hint": "You will be redirected to PayOS's secure checkout.",
   "pay.countdown_expired": "Expired",
+  "pay.stale_warning": "Could not refresh the payment status. Showing the last update; it will retry automatically.",
 
   // Payments (admin)
   "admin.payments": "Payments",
