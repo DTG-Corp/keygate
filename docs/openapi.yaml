@@ -65,11 +65,14 @@ info:
     | `admin` | every `/admin/*` route |
     | `licenses:write` | the license routes tagged **Admin Licenses** |
     | `releases:write` | the release routes tagged **Admin Releases** |
+    | `payments:read` | consumer `GET /payments/orders...` |
+    | `payments:write` | consumer create/cancel, and the same GETs |
 
     A key with no scope reaches nothing. Each admin operation lists the
-    scopes that reach it in `x-required-scopes`. A `licenses:write` or
-    `releases:write` key may be bound to one product. A bound key is held
-    to that product on every route it can reach: lists and the export
+    scopes that reach it in `x-required-scopes`. A `licenses:write`,
+    `releases:write`, `payments:read` or `payments:write` key may be bound
+    to one product. A bound key is held to that product on every route it
+    can reach: lists and the export
     narrow to it, and naming another product's resource or `product_id`
     answers `403 PRODUCT_SCOPE_MISMATCH`. An `admin` key cannot be bound
     (it reaches every product's catalogue and keys anyway), so creating
@@ -248,6 +251,18 @@ tags:
     description: |
       Webhook endpoints and their deliveries. Requires the `admin` scope
       or an admin session.
+  - name: Payments
+    description: |
+      Consumer payment orders for a merchant backend, the public status
+      poll, and the raw-body webhook routes SePay and PayOS call.
+  - name: Payment Webhooks
+    description: |
+      Raw-body deliveries from SePay and PayOS. A provider, not an SDK,
+      reads these responses: they use bare statuses, not the envelope.
+  - name: Payments Admin
+    description: |
+      Payment ledger, reconciliation queue and provider configuration.
+      Requires the `admin` scope or an admin session.
   - name: Webhooks
     description: Events Keygate posts to your webhook endpoints
 
@@ -1371,6 +1386,11 @@ paths:
         left out) and the buyer can change it on Stripe's page between
         `min_quantity` and `max_quantity`. The license holds what the
         subscription bills.
+
+        A KG order code (`KG` plus six Crockford characters) is a
+        phase-1a payment order instead: it answers `302` to
+        `/checkout/pay/{code}`, the SPA page that polls
+        `/pay/{code}/status`. Anything else keeps the behavior above.
       parameters:
         - $ref: "#/components/parameters/CheckoutID"
         - name: quantity
@@ -5504,6 +5524,1328 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /payments/orders:
+    post:
+      tags: [Payments]
+      summary: Create a payment order
+      description: |
+        Creates a pending order and a provider instruction (a SePay static
+        VietQR or a PayOS hosted link). `plan_id`, `email` and `quantity`
+        are required. `quantity` is 1–100; omitted or out of range is
+        `INVALID_QUANTITY`. An unknown, inactive or unpriced plan is
+        `PAYMENT_PRICE_NOT_CONFIGURED` (the code means "not sellable right
+        now"). An explicit provider that is disabled, unknown or
+        incomplete is `PAYMENT_PROVIDER_DISABLED`; a provider API failure
+        while creating the instruction is `PAYMENT_PROVIDER_ERROR` and
+        leaves the order pending, so the retry is safe.
+
+        An `Idempotency-Key` is optional; when sent, a replay returns the
+        first `201` with `Idempotent-Replayed: true`, and a different body
+        under the same key is `422 IDEMPOTENCY_KEY_CONFLICT`.
+      operationId: createPaymentOrder
+      x-required-scopes: ["payments:write"]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan_id, email, quantity]
+              properties:
+                plan_id: { type: string, format: uuid }
+                email: { type: string, format: email }
+                provider:
+                  type: string
+                  enum: [sepay, payos]
+                  description: Omitted uses `payment_default_provider`, then sepay, then payos.
+                quantity: { type: integer, minimum: 1, maximum: 100 }
+                buyer:
+                  type: object
+                  properties:
+                    name: { type: string }
+                    email: { type: string }
+                    phone: { type: string }
+                    tax_id: { type: string }
+                    address: { type: string }
+                metadata:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "201":
+          description: Order and payment instruction
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/PaymentOrder" }
+        "400":
+          description: "`BAD_REQUEST`: malformed JSON or missing `plan_id`. `INVALID_QUANTITY`: quantity outside 1–100."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          description: "`INSUFFICIENT_SCOPE` or `PRODUCT_SCOPE_MISMATCH` (the plan belongs to another product)."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "422":
+          description: "`PAYMENT_PRICE_NOT_CONFIGURED`: unknown or inactive plan, no price for the selected provider, or a buyer email without `@`. `IDEMPOTENCY_KEY_CONFLICT`: the key was reused with a different body."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "502":
+          description: "`PAYMENT_PROVIDER_ERROR`: the provider failed to create the instruction; the order stays pending."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "503":
+          description: "`PAYMENT_PROVIDER_DISABLED`: the selected or default rail has no usable configuration."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    get:
+      tags: [Payments]
+      summary: List payment orders
+      description: |
+        Newest first, paginated (default 50, max 200). The item key is
+        literally `data` inside `data`. List rows omit
+        `subtotal_minor`, `discount_minor`, `tax_minor` and `payment`.
+        A product-bound key sees only its product's orders; naming another
+        `product_id` is `PRODUCT_SCOPE_MISMATCH`.
+      operationId: listPaymentOrders
+      x-required-scopes: ["payments:read", "payments:write"]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [pending, paid, expired, canceled, refunded, partially_refunded] }
+        - name: provider
+          in: query
+          schema: { type: string, enum: [sepay, payos] }
+        - name: email
+          in: query
+          description: Exact, case-insensitive buyer email.
+          schema: { type: string, format: email }
+        - name: product_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: created_from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: created_to
+          in: query
+          schema: { type: string, format: date-time }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageOffset"
+      responses:
+        "200":
+          description: A page of orders
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/PaymentOrder" }
+                      total: { type: integer }
+                      limit: { type: integer }
+                      offset: { type: integer }
+        "400":
+          description: "`BAD_REQUEST`: `created_from` or `created_to` is not RFC 3339."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /payments/orders/{code}:
+    get:
+      tags: [Payments]
+      summary: Get one payment order
+      description: |
+        The order plus its latest payment attempt under `payment`. An
+        unknown code is `PAYMENT_ORDER_NOT_FOUND`; for a product-bound key,
+        so is another product's order.
+      operationId: getPaymentOrder
+      x-required-scopes: ["payments:read", "payments:write"]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentOrderCode"
+      responses:
+        "200":
+          description: The order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/PaymentOrder" }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "404":
+          description: "`PAYMENT_ORDER_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /payments/orders/{code}/cancel:
+    post:
+      tags: [Payments]
+      summary: Cancel a pending order
+      description: |
+        No body. Cancels a still-pending order and returns it without a
+        `payment` block. Paid, expired, canceled and refunded orders are
+        `PAYMENT_ORDER_NOT_PAYABLE`. The provider is not called: a PayOS
+        link simply expires.
+      operationId: cancelPaymentOrder
+      x-required-scopes: ["payments:write"]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentOrderCode"
+      responses:
+        "200":
+          description: The canceled order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/PaymentOrder" }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "404":
+          description: "`PAYMENT_ORDER_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: "`PAYMENT_ORDER_NOT_PAYABLE`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /pay/{checkout_id}/status:
+    servers:
+      - url: "{server}"
+        description: Served at the root, outside /api/v1
+        variables:
+          server:
+            default: http://localhost:9000
+      - url: "{server}/api/v1"
+        description: Alias the SPA's API client uses
+        variables:
+          server:
+            default: http://localhost:9000
+    get:
+      tags: [Payments]
+      summary: Public order status (no auth)
+      description: |
+        The order code is the capability. Both spellings share the
+        `payments_public` rate-limit bucket, so switching paths does not
+        buy a second budget. `Cache-Control: no-store`. Unknown or
+        malformed codes are the generic `NOT_FOUND`.
+
+        Flat payload: `amount_minor`, not `amount`; `bank` is the account
+        object; there is no `paid_at`, `qr_payload`, `va_number`, buyer or
+        licence data. `description` is always present (order code, or the
+        memo the provider stored).
+      operationId: getPublicPaymentStatus
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentCheckoutID"
+      responses:
+        "200":
+          description: The public order state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    required: [code, status, amount_minor, currency, currency_exponent, expires_at, description]
+                    properties:
+                      code: { type: string, example: KG7F3K2Q }
+                      status: { type: string, enum: [pending, paid, expired, canceled, refunded, partially_refunded] }
+                      amount_minor: { type: integer, format: int64, description: VND đồng (exponent 0) }
+                      currency: { type: string, example: VND }
+                      currency_exponent: { type: integer, example: 0 }
+                      expires_at: { type: string, format: date-time }
+                      description: { type: string, example: KG7F3K2Q }
+                      qr_image_url: { type: string }
+                      checkout_url: { type: string }
+                      bank: { $ref: "#/components/schemas/PaymentBankAccount" }
+        "404":
+          description: "`NOT_FOUND`: no such order code"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /webhook/sepay:
+    post:
+      tags: [Payment Webhooks]
+      summary: SePay bank webhook (raw body)
+      description: |
+        Raw-body route: no JSON envelope, no consumer/admin auth. The
+        body is capped at 256 KiB. Authentication is the config row's
+        `webhook_auth_mode`:
+
+        - `hmac`: `X-SePay-Timestamp` (Unix seconds) and
+          `X-SePay-Signature: sha256=<hex>`, the HMAC-SHA256 of
+          `<timestamp>.<raw body>` keyed with the config's
+          `webhook_secret`. A skew over 300 seconds is rejected.
+        - `apikey`: `Authorization: Apikey <api_token>`.
+        - `none`: unsigned, test rows only. A live row with `none` is
+          refused when saved.
+
+        Success is exactly `200` and `{"success": true}`; SePay retries a
+        delivery it does not see acked with that exact body for roughly
+        half an hour. `401` (bad signature/key), `400` (unparseable body),
+        `403` (account is not the order's product's), `413`, `500`
+        (transient settlement failure; retry) and `503` (no usable
+        config) are bare statuses with no error code. Duplicates,
+        unknown order codes and outgoing transfers are acked and never
+        grant a licence. There is no source-IP allowlist in phase 1a.
+      operationId: sepayBankWebhook
+      security: []
+      parameters:
+        - name: X-SePay-Timestamp
+          in: header
+          required: false
+          description: Unix seconds; required in `hmac` mode.
+          schema: { type: string }
+        - name: X-SePay-Signature
+          in: header
+          required: false
+          description: "`sha256=<hex>`; required in `hmac` mode."
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PaymentWebhookSePay" }
+      responses:
+        "200":
+          description: "Ack. Body is exactly `{\"success\": true}`."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+        "400":
+          description: Body is not JSON
+        "401":
+          description: Missing, wrong or stale signature/key (bare, no envelope)
+        "403":
+          description: The verified account does not belong to the order's product
+        "413":
+          description: Body over 256 KiB
+        "500":
+          description: Transient settlement failure; SePay should retry
+        "503":
+          description: No enabled, decryptable provider config
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /webhook/sepay-ipn:
+    post:
+      tags: [Payment Webhooks]
+      summary: SePay hosted-gateway IPN (raw body)
+      description: |
+        Raw-body route for a SePay hosted-gateway notification. The
+        `X-Secret-Key` header is compared in constant time with the
+        config's `ipn_secret`. Only `ORDER_PAID` + `CAPTURED` + `APPROVED`
+        settles; `TRANSACTION_VOID` emits `payment.failed`; other statuses
+        change no licence. Success is `200` with an empty body.
+
+        Phase 1a does not create hosted-gateway checkouts, but this route
+        settles an order created outside Keygate. Failures mirror the bank
+        webhook: bare `401`, `400`, `403`, `413`, `500`, `503`.
+      operationId: sepayGatewayIPN
+      security: []
+      parameters:
+        - name: X-Secret-Key
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PaymentWebhookSePayIPN" }
+      responses:
+        "200":
+          description: Ack (empty body)
+        "400":
+          description: Body is not JSON
+        "401":
+          description: Missing or wrong `X-Secret-Key` (bare, no envelope)
+        "403":
+          description: The verified account does not belong to the order's product
+        "413":
+          description: Body over 256 KiB
+        "500":
+          description: Transient settlement failure; SePay should retry
+        "503":
+          description: No enabled, decryptable provider config
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /webhook/payos:
+    post:
+      tags: [Payment Webhooks]
+      summary: PayOS webhook (raw body)
+      description: |
+        Raw-body route. PayOS signs the `data` object, not a header: the
+        `signature` field is verified with the config's `checksum_key`
+        before any write. Any `2xx` marks the delivery delivered; this
+        server answers `200` with `{"success": true}`. A missing or wrong
+        signature is a bare `401`. There is no PayOS sandbox.
+
+        Duplicate deliveries, unknown orders and non-paid statuses are
+        acked; only `code=00`, `success=true` and `data.code=00` settle.
+        `UNDERPAID` is recorded as pending for an operator. Failures
+        mirror the other webhooks: bare `400`, `401`, `403`, `413`, `500`,
+        `503`. PayOS's retry policy is undocumented, so the reconciliation
+        worker is the backstop.
+      operationId: payosWebhook
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PaymentWebhookPayOS" }
+      responses:
+        "200":
+          description: Ack
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+        "400":
+          description: Body is not JSON
+        "401":
+          description: Missing or invalid signature (bare, no envelope)
+        "403":
+          description: The verified account does not belong to the order's product
+        "413":
+          description: Body over 256 KiB
+        "500":
+          description: Transient settlement failure; PayOS should retry
+        "503":
+          description: No enabled, decryptable provider config
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/orders:
+    get:
+      tags: [Payments Admin]
+      summary: Payment order ledger
+      description: |
+        Requires the `admin` scope or an admin session. Filters `status`,
+        `kind`, `product_id`, `email`, `provider`; paginated (default 50,
+        max 200). An unknown `status` is `INVALID_STATUS`. Rows omit
+        `buyer` and `metadata`; the detail route has them.
+      operationId: adminListPaymentOrders
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [pending, paid, expired, canceled, refunded, partially_refunded] }
+        - name: kind
+          in: query
+          schema: { type: string }
+        - name: product_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: email
+          in: query
+          schema: { type: string }
+        - name: provider
+          in: query
+          schema: { type: string, enum: [sepay, payos] }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageOffset"
+      responses:
+        "200":
+          description: A page of orders
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      orders:
+                        type: array
+                        items: { $ref: "#/components/schemas/PaymentOrder" }
+                      total: { type: integer }
+                      limit: { type: integer }
+                      offset: { type: integer }
+        "400":
+          description: "`INVALID_STATUS`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/orders/{code}:
+    get:
+      tags: [Payments Admin]
+      summary: One order with its ledger
+      description: |
+        `data` has `order`, `attempts`, `transactions`, `events` and
+        `refunds`. The detail order includes `buyer` and `metadata`;
+        transactions include their raw provider payloads here (PII and
+        provider noise — admin only).
+      operationId: adminGetPaymentOrder
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentOrderCode"
+      responses:
+        "200":
+          description: Order and ledger
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      order: { $ref: "#/components/schemas/PaymentOrder" }
+                      attempts:
+                        type: array
+                        items: { $ref: "#/components/schemas/PaymentAttempt" }
+                      transactions:
+                        type: array
+                        items: { $ref: "#/components/schemas/PaymentTransaction" }
+                      events:
+                        type: array
+                        items: { $ref: "#/components/schemas/PaymentEvent" }
+                      refunds:
+                        type: array
+                        items: { $ref: "#/components/schemas/PaymentRefund" }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`PAYMENT_ORDER_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/orders/{code}/mark-paid:
+    post:
+      tags: [Payments Admin]
+      summary: Settle an order by hand (test rows only)
+      description: |
+        Rehearsal path: grants the licence without money moving, but only
+        when an enabled live config for this order's rail and product does
+        not exist and a usable test configuration resolves. A live config
+        covering the order is `PAYMENT_MANUAL_SETTLEMENT_FORBIDDEN`; a
+        missing, disabled or broken row (when the config service exists)
+        is `PAYMENT_MANUAL_SETTLEMENT_UNVERIFIABLE`. An install with no
+        config service at all keeps the rehearsal path. Only a pending
+        order can be settled (`PAYMENT_ORDER_NOT_PAYABLE` otherwise). The
+        grant is idempotent: it uses the same settlement service as a
+        webhook.
+      operationId: adminMarkPaymentOrderPaid
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentOrderCode"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        "200":
+          description: The settled order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      order: { $ref: "#/components/schemas/PaymentOrder" }
+        "400":
+          description: "`BAD_REQUEST`: malformed JSON or blank `reason`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`PAYMENT_ORDER_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: "`PAYMENT_ORDER_NOT_PAYABLE`, or `PAYMENT_MANUAL_SETTLEMENT_FORBIDDEN` when a live config covers the order."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "422":
+          description: "`PAYMENT_MANUAL_SETTLEMENT_UNVERIFIABLE`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/orders/{code}/cancel:
+    post:
+      tags: [Payments Admin]
+      summary: Cancel a pending order
+      description: No body. Paid orders are never cancelled.
+      operationId: adminCancelPaymentOrder
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentOrderCode"
+      responses:
+        "200":
+          description: The canceled order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      order: { $ref: "#/components/schemas/PaymentOrder" }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`PAYMENT_ORDER_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: "`PAYMENT_ORDER_NOT_PAYABLE`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/orders/{code}/refund:
+    post:
+      tags: [Payments Admin]
+      summary: Record a manual refund
+      description: |
+        Phase 1a performs no provider refund: the operator returns the
+        money outside the system and records the row. `method` defaults
+        to `manual`; any other value is `PAYMENT_REFUND_UNSUPPORTED`.
+        The order must be paid and the sum of recorded refunds may not
+        exceed the order. The order becomes `refunded` (full) or
+        `partially_refunded`; **the licence is not revoked or shortened**.
+      operationId: adminRefundPaymentOrder
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentOrderCode"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount_minor]
+              properties:
+                amount_minor: { type: integer, format: int64, minimum: 1 }
+                reason: { type: string }
+                method: { type: string, enum: [manual], default: manual }
+                provider_ref: { type: string, description: Bank reference for the manual transfer, if any. }
+      responses:
+        "200":
+          description: The refund and the updated order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      refund: { $ref: "#/components/schemas/PaymentRefund" }
+                      order: { $ref: "#/components/schemas/PaymentOrder" }
+        "400":
+          description: "`BAD_REQUEST`: malformed JSON."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`PAYMENT_ORDER_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: "`PAYMENT_ORDER_NOT_REFUNDABLE`: only a paid (or partially refunded) order can be refunded."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "422":
+          description: "`PAYMENT_REFUND_INVALID`, `PAYMENT_REFUND_EXCEEDS_ORDER` or `PAYMENT_REFUND_UNSUPPORTED`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/transactions:
+    get:
+      tags: [Payments Admin]
+      summary: Payment transaction ledger
+      description: |
+        Filters `provider`, `direction` (`in`/`out`), `status`
+        (`matched`/`unmatched`/`ignored`), `product_id`, `order_id`.
+        Raw provider payloads are omitted from list rows. Unknown
+        `status` is `INVALID_STATUS`.
+      operationId: adminListPaymentTransactions
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: provider
+          in: query
+          schema: { type: string, enum: [sepay, payos] }
+        - name: direction
+          in: query
+          schema: { type: string, enum: [in, out] }
+        - name: status
+          in: query
+          schema: { type: string, enum: [matched, unmatched, ignored] }
+        - name: product_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: order_id
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageOffset"
+      responses:
+        "200":
+          description: A page of transactions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      transactions:
+                        type: array
+                        items: { $ref: "#/components/schemas/PaymentTransaction" }
+                      total: { type: integer }
+                      limit: { type: integer }
+                      offset: { type: integer }
+        "400":
+          description: "`INVALID_STATUS`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/unmatched:
+    get:
+      tags: [Payments Admin]
+      summary: The unmatched transfer queue
+      description: |
+        Not offset-paged: worked from the top. `limit` only, default 50,
+        max 200. Raw provider payloads are included. An amount-only match
+        suggested by the reconciler appears here as a transfer whose
+        `ignore_reason` names the candidate order — a suggestion, not a
+        settlement.
+      operationId: adminListUnmatchedTransactions
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PageLimit"
+      responses:
+        "200":
+          description: The queue
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      transactions:
+                        type: array
+                        items: { $ref: "#/components/schemas/PaymentTransaction" }
+                      count: { type: integer }
+                      limit: { type: integer }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/transactions/{id}/match:
+    post:
+      tags: [Payments Admin]
+      summary: Match a transfer to an order
+      description: |
+        Requires an unmatched, incoming transfer and a pending order on
+        the same provider, for the exact amount and currency. Settles
+        through the same service as a webhook, so the licence grant is
+        idempotent.
+      operationId: adminMatchPaymentTransaction
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentTransactionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order_code]
+              properties:
+                order_code: { type: string, example: KG7F3K2Q }
+      responses:
+        "200":
+          description: The matched transfer and order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      transaction: { $ref: "#/components/schemas/PaymentTransaction" }
+                      order: { $ref: "#/components/schemas/PaymentOrder" }
+        "400":
+          description: "`BAD_REQUEST`: malformed JSON or missing `order_code`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`PAYMENT_TRANSACTION_NOT_FOUND` or `PAYMENT_ORDER_NOT_FOUND`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: "`PAYMENT_TRANSACTION_NOT_UNMATCHED`, `PAYMENT_TRANSACTION_PROVIDER_MISMATCH` or `PAYMENT_ORDER_NOT_PAYABLE`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "422":
+          description: "`PAYMENT_TRANSACTION_NOT_INCOMING` or `PAYMENT_TRANSACTION_MISMATCH` (amount/currency)."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/transactions/{id}/ignore:
+    post:
+      tags: [Payments Admin]
+      summary: Ignore a transfer
+      description: |
+        Requires `reason` and an unmatched transfer. The row stays for the
+        audit trail; the money is not settled.
+      operationId: adminIgnorePaymentTransaction
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentTransactionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        "200":
+          description: The ignored transfer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/PaymentTransaction" }
+        "400":
+          description: "`BAD_REQUEST`: malformed JSON or blank `reason`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`PAYMENT_TRANSACTION_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: "`PAYMENT_TRANSACTION_NOT_UNMATCHED`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/health:
+    get:
+      tags: [Payments Admin]
+      summary: Payment rail health
+      description: |
+        One entry per rail, both always present. `mode` appears only when
+        every row for the rail agrees; `cursor_lag_seconds` is how far
+        the SePay reconciliation cursor trails now. This is the first
+        place to look when settlement stops.
+      operationId: adminPaymentHealth
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      responses:
+        "200":
+          description: Per-rail health
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      providers:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            provider: { type: string, enum: [sepay, payos] }
+                            enabled: { type: boolean }
+                            mode: { type: string, enum: [test, live] }
+                            last_event_at: { type: string, format: date-time }
+                            unmatched_open: { type: integer }
+                            pending_orders: { type: integer }
+                            last_error: { type: string }
+                            last_reconciled_at: { type: string, format: date-time }
+                            cursor_lag_seconds: { type: integer }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/providers:
+    get:
+      tags: [Payments Admin]
+      summary: List provider configuration rows
+      description: |
+        Secrets are never returned: each row carries
+        `credentials_set` and `secret_set` booleans. `product_id` is
+        absent for the install-wide default.
+      operationId: adminListPaymentProviders
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      responses:
+        "200":
+          description: Provider rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      providers:
+                        type: array
+                        items: { $ref: "#/components/schemas/PaymentProviderConfig" }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    put:
+      tags: [Payments Admin]
+      summary: Create or update a provider configuration
+      description: |
+        One row per `(provider, product_id, mode)`; `product_id` empty is
+        the install-wide default. `mode` omitted uses `PAYMENT_MODE`
+        (`live` by default). `enabled` omitted keeps the stored value; a
+        new row defaults to false. `config`, `credentials` and a
+        non-empty `webhook_secret` omitted keep the stored value.
+
+        An enabled row must have a webhook secret and usable
+        credentials/config, or the save is
+        `PAYMENT_PROVIDER_CONFIG_INVALID`. A live SePay row may not use
+        `webhook_auth_mode=none`.
+
+        SePay `config`: `bank_name`, `bank_bin`, `bank_code`,
+        `account_no`, `account_name`, `webhook_auth_mode`
+        (`hmac|apikey|none`). SePay `credentials`: `api_token`,
+        `ipn_secret`. PayOS `config`: `client_id`. PayOS `credentials`:
+        `api_key`, `checksum_key`.
+      operationId: adminUpsertPaymentProvider
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider]
+              properties:
+                provider: { type: string, enum: [sepay, payos] }
+                product_id: { type: string, format: uuid }
+                mode: { type: string, enum: [test, live] }
+                enabled: { type: boolean }
+                config:
+                  type: object
+                  additionalProperties: true
+                credentials:
+                  type: object
+                  additionalProperties: true
+                webhook_secret: { type: string, description: Empty keeps the stored secret. }
+      responses:
+        "200":
+          description: The saved row
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/PaymentProviderConfig" }
+        "400":
+          description: "`PAYMENT_PROVIDER_UNKNOWN`, `PAYMENT_PROVIDER_CONFIG_INVALID` or `BAD_REQUEST`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`PAYMENT_PROVIDER_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          description: "`PAYMENT_PROVIDER_DISABLED`: the server has no master encryption key."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /admin/payments/providers/{id}/secrets:
+    delete:
+      tags: [Payments Admin]
+      summary: Blank selected stored secrets
+      description: |
+        `id` is the config row id, not the provider name. A blank secret
+        on upsert means "keep it"; this call is how it is cleared.
+      operationId: adminDeletePaymentProviderSecrets
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fields]
+              properties:
+                fields:
+                  type: array
+                  minItems: 1
+                  items: { type: string, enum: [credentials, webhook_secret] }
+      responses:
+        "204":
+          description: Secrets cleared
+        "400":
+          description: "`BAD_REQUEST`: unknown field or empty `fields`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`PAYMENT_PROVIDER_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/providers/{provider}/test:
+    post:
+      tags: [Payments Admin]
+      summary: Test a provider's credentials
+      description: |
+        Calls the adapter's credential check (SePay `userapi.sepay.vn`,
+        PayOS merchant API). An API refusal is a `200` with `ok: false`
+        and a bounded `error`, not a 4xx. `product_id` selects a product
+        override; omitted uses the install-wide row.
+      operationId: adminTestPaymentProvider
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentProviderName"
+        - name: product_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The check outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      provider: { type: string }
+                      mode: { type: string, enum: [test, live] }
+                      ok: { type: boolean }
+                      error: { type: string, description: Present only when `ok` is false. }
+        "400":
+          description: "`PAYMENT_PROVIDER_UNKNOWN` or `PAYMENT_PROVIDER_CONFIG_INVALID`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`PAYMENT_PROVIDER_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          description: "`PAYMENT_PROVIDER_DISABLED`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /admin/payments/providers/payos/confirm-webhook:
+    post:
+      tags: [Payments Admin]
+      summary: Register this install's PayOS webhook URL
+      description: |
+        No body. Builds
+        `{payment_webhook_base_url or BASE_URL}/api/v1/webhook/payos`
+        and asks PayOS to register it. PayOS probes the URL immediately,
+        so it must be public HTTPS. Resolves the install-wide PayOS row
+        only (not a product override). There is no PayOS sandbox.
+      operationId: adminConfirmPayOSWebhook
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      responses:
+        "200":
+          description: Registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      provider: { type: string, example: payos }
+                      webhook_url: { type: string, format: uri }
+                      confirmed: { type: boolean, example: true }
+        "400":
+          description: "`PAYMENT_WEBHOOK_URL_UNSET`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "502":
+          description: "`PAYMENT_PROVIDER_ERROR`: PayOS rejected the confirmation."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "503":
+          description: "`PAYMENT_PROVIDER_DISABLED`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /admin/plans/{id}/prices:
+    get:
+      tags: [Payments Admin]
+      summary: List a plan's prices
+      description: Active and retired rows, newest first, no pagination.
+      operationId: adminListPlanPrices
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PlanID"
+      responses:
+        "200":
+          description: The plan's price rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      prices:
+                        type: array
+                        items: { $ref: "#/components/schemas/PaymentPrice" }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`PLAN_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    put:
+      tags: [Payments Admin]
+      summary: Set the active price in a provider/currency/interval slot
+      description: |
+        Replaces the active row in its `(provider, currency,
+        billing_interval)` slot and retires the old one. `amount_minor`
+        is required. An explicit `currency_exponent` that disagrees with
+        the currency is `INVALID_CURRENCY_EXPONENT`. Price must be entered
+        before the plan can sell: no row means checkout answers
+        `PAYMENT_PRICE_NOT_CONFIGURED`.
+      operationId: adminUpsertPlanPrice
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PlanID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, currency, amount_minor]
+              properties:
+                provider: { type: string, enum: [sepay, payos] }
+                currency: { type: string, enum: [VND] }
+                amount_minor: { type: integer, format: int64, minimum: 1 }
+                currency_exponent: { type: integer, enum: [0], description: Optional; if sent it must agree with the currency. }
+                billing_interval: { type: string, description: "`month`, `year`, or empty for one-time." }
+                external_price_id: { type: string }
+      responses:
+        "200":
+          description: The saved price
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/PaymentPrice" }
+        "400":
+          description: "`INVALID_AMOUNT`, `INVALID_CURRENCY_EXPONENT` or `BAD_REQUEST`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`PLAN_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: "`PRICE_SLOT_CONFLICT`: the slot changed under the write; retry."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/plans/{id}/prices/{price_id}:
+    delete:
+      tags: [Payments Admin]
+      summary: Deactivate one price row
+      description: "Soft delete: the row stays for the audit trail and stops being sellable."
+      operationId: adminDeletePlanPrice
+      x-required-scopes: [admin]
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PlanID"
+        - $ref: "#/components/parameters/PriceID"
+      responses:
+        "204":
+          description: Deactivated
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`PRICE_NOT_FOUND` (unknown row or one outside the plan)"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
 webhooks:
   # Every event Keygate posts. Each delivery is a POST of
   # application/json with the WebhookPayload envelope; see the
@@ -6204,7 +7546,10 @@ components:
       in: path
       name: checkout_id
       required: true
-      description: The plan's 8-character checkout id, as in its `/pay/{checkout_id}` link.
+      description: |
+        An 8-character checkout id. A legacy Stripe/self sign-up id
+        answers the checkout flow; a `KG` payment order code answers a
+        `302` to `/checkout/pay/{code}`.
       schema: { type: string, minLength: 8, maxLength: 8 }
       example: a1b2c3d4
     Platform:
@@ -6364,6 +7709,48 @@ components:
       description: The delivery id. Retries of a delivery keep it; a manual resend gets a new one.
       schema: { type: string, format: uuid }
 
+    PaymentOrderCode:
+      in: path
+      name: code
+      required: true
+      description: Payment order code, `KG` plus six Crockford characters.
+      schema:
+        type: string
+        pattern: '^KG[A-Z0-9]{6}$'
+        example: KG7F3K2Q
+    PaymentCheckoutID:
+      in: path
+      name: checkout_id
+      required: true
+      description: The payment order code; the code is the only capability this route accepts.
+      schema:
+        type: string
+        pattern: '^KG[A-Z0-9]{6}$'
+        example: KG7F3K2Q
+    PaymentTransactionID:
+      in: path
+      name: id
+      required: true
+      description: Payment transaction id.
+      schema: { type: string, format: uuid }
+    PaymentProviderName:
+      in: path
+      name: provider
+      required: true
+      schema: { type: string, enum: [sepay, payos] }
+    PlanID:
+      in: path
+      name: id
+      required: true
+      description: Plan id.
+      schema: { type: string, format: uuid }
+    PriceID:
+      in: path
+      name: price_id
+      required: true
+      description: Plan price row id.
+      schema: { type: string, format: uuid }
+
   responses:
     SubscriptionChangeRefused:
       description: |
@@ -6490,6 +7877,7 @@ components:
       description: |
         Refresh token cookie (30 days), set with the session cookie and
         sent only to `/api/v1/auth/refresh`. HttpOnly + SameSite=Lax.
+
 
   schemas:
     VelopackFeed:
@@ -7147,3 +8535,269 @@ components:
               type: array
               items: { type: string }
               description: Platforms of the release's artifacts
+
+    PaymentBankAccount:
+      type: object
+      description: Destination account for a bank transfer.
+      properties:
+        bank_name: { type: string, example: MB Bank }
+        bank_bin: { type: string, example: "970422" }
+        account_no: { type: string, example: "0978482700" }
+        account_name: { type: string, example: CONG TY TNHH KEYGATE }
+
+    PaymentAttempt:
+      type: object
+      description: |
+        One provider instruction. The consumer API nests the instruction
+        fields under `payment`; the admin ledger returns the whole row
+        (including `id`, `status` and `raw`). Empty provider fields are
+        present as empty strings on the consumer shape when an attempt
+        exists.
+      properties:
+        id: { type: string, format: uuid }
+        order_id: { type: string, format: uuid }
+        provider: { type: string, enum: [sepay, payos] }
+        provider_ref: { type: string }
+        status: { type: string, enum: [created, pending, succeeded, failed, expired, canceled] }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string, example: VND }
+        qr_payload:
+          type: string
+          description: SePay's VietQR image URL, or PayOS's EMVCo string.
+        qr_image_url:
+          type: string
+          description: Renderable image URL when the adapter stored one; otherwise repeats `qr_payload`.
+        checkout_url: { type: string, description: PayOS hosted link (empty for SePay). }
+        va_number: { type: string, description: Reserved; empty in phase 1a. }
+        bank_account: { $ref: "#/components/schemas/PaymentBankAccount" }
+        raw:
+          type: object
+          additionalProperties: true
+          description: Non-secret adapter response; admin detail only.
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PaymentOrder:
+      type: object
+      description: |
+        A payment order. Consumer create/get return the fields below
+        (minus `id`, `numeric_code`, `created_at`, `updated_at`, `buyer`
+        and `metadata`, which are admin projections). List rows omit
+        `subtotal_minor`, `discount_minor`, `tax_minor` and `payment`.
+        `amount` is always `*_minor`: VND has exponent 0, so an integer
+        is đồng. `discount_minor` is 0 in phase 1a.
+      required: [code, status, kind, provider, product_id, plan_id, email, quantity, total_minor, currency, currency_exponent, expires_at]
+      properties:
+        id: { type: string, format: uuid }
+        numeric_code: { type: integer, format: int64, description: PayOS numeric order code; admin only. }
+        code: { type: string, pattern: '^KG[A-Z0-9]{6}$', example: KG7F3K2Q }
+        status: { type: string, enum: [pending, paid, expired, canceled, refunded, partially_refunded] }
+        kind: { type: string, example: new }
+        provider: { type: string, enum: [sepay, payos] }
+        product_id: { type: string, format: uuid }
+        plan_id: { type: string, format: uuid }
+        price_id: { type: string, format: uuid }
+        license_id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        quantity: { type: integer, minimum: 1, maximum: 100 }
+        subtotal_minor: { type: integer, format: int64 }
+        discount_minor: { type: integer, format: int64 }
+        tax_minor: { type: integer, format: int64 }
+        total_minor: { type: integer, format: int64 }
+        currency: { type: string, example: VND }
+        currency_exponent: { type: integer, example: 0 }
+        expires_at: { type: string, format: date-time }
+        paid_at: { type: string, format: date-time }
+        period_start: { type: string, format: date-time }
+        period_end: { type: string, format: date-time }
+        last_settlement_error: { type: string }
+        buyer:
+          type: object
+          description: Admin detail only.
+          properties:
+            name: { type: string }
+            email: { type: string }
+            phone: { type: string }
+            tax_id: { type: string }
+            address: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Admin detail only; never sent to the provider.
+        payment: { $ref: "#/components/schemas/PaymentAttempt" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PaymentTransaction:
+      type: object
+      description: A transfer seen at a provider, matched or in the unmatched queue.
+      properties:
+        id: { type: string, format: uuid }
+        provider: { type: string, enum: [sepay, payos] }
+        provider_ref: { type: string }
+        order_id: { type: string, format: uuid }
+        attempt_id: { type: string, format: uuid }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        direction: { type: string, enum: [in, out] }
+        provider_account: { type: string }
+        reference: { type: string }
+        content: { type: string }
+        status: { type: string, enum: [matched, unmatched, ignored] }
+        ignore_reason: { type: string }
+        matched_by: { type: string, format: uuid, description: NULL when an API-key admin matched it. }
+        matched_at: { type: string, format: date-time }
+        raw:
+          type: object
+          additionalProperties: true
+          description: Provider payload; detail and unmatched-queue responses only.
+        occurred_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+
+    PaymentEvent:
+      type: object
+      description: The raw provider delivery behind a state change, kept once per event id.
+      properties:
+        id: { type: string, format: uuid }
+        provider: { type: string }
+        event_id: { type: string }
+        order_id: { type: string, format: uuid }
+        kind: { type: string }
+        raw: { type: object, additionalProperties: true }
+        occurred_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+
+    PaymentRefund:
+      type: object
+      description: |
+        A recorded return of money. Phase 1a is manual only: the operator
+        transfers the money back and records it. A refund does not revoke
+        the licence.
+      properties:
+        id: { type: string, format: uuid }
+        order_id: { type: string, format: uuid }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        reason: { type: string }
+        method: { type: string, enum: [manual] }
+        provider_ref: { type: string }
+        status: { type: string, example: succeeded }
+        created_by: { type: string, format: uuid, description: NULL when an API-key admin recorded it. }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PaymentPrice:
+      type: object
+      description: |
+        A plan's price for one provider/currency/billing-interval slot.
+        A plan with no active row cannot be sold; checkout answers
+        `PAYMENT_PRICE_NOT_CONFIGURED`.
+      properties:
+        id: { type: string, format: uuid }
+        plan_id: { type: string, format: uuid }
+        provider: { type: string, enum: [sepay, payos] }
+        currency: { type: string, example: VND }
+        amount_minor: { type: integer, format: int64 }
+        currency_exponent: { type: integer, example: 0 }
+        billing_interval: { type: string, description: "`month`, `year`, or empty for one-time." }
+        external_price_id: { type: string }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PaymentProviderConfig:
+      type: object
+      description: |
+        One provider row. Secrets are never returned; the booleans say
+        whether one is stored. `product_id` is absent for the install-wide
+        default.
+      properties:
+        id: { type: string, format: uuid }
+        provider: { type: string, enum: [sepay, payos] }
+        product_id: { type: string, format: uuid }
+        mode: { type: string, enum: [test, live] }
+        enabled: { type: boolean }
+        config: { type: object, additionalProperties: true }
+        credentials_set: { type: boolean }
+        secret_set: { type: boolean }
+
+    PaymentWebhookSePay:
+      type: object
+      description: |
+        SePay bank webhook. `code` may be null; the order code is also
+        searched for in `content` and `description`. `transferType=in`
+        settles, `out` is recorded and never settles. Numbers are exact;
+        VND has no minor digits.
+      required: [id, transferType, transferAmount]
+      properties:
+        id: { type: integer, format: int64, description: SePay transaction id; the dedupe key. }
+        gateway: { type: string, example: MB Bank }
+        transactionDate: { type: string, example: "2026-11-12 15:04:05", description: VN local time, no offset. }
+        accountNumber: { type: string, example: "0978482700" }
+        subAccount: { type: string }
+        code: { type: [string, "null"], example: KG7F3K2Q }
+        content: { type: string, example: "KG7F3K2Q chuyen tien" }
+        transferType: { type: string, enum: [in, out] }
+        description: { type: string }
+        transferAmount: { type: integer, format: int64, example: 1190000 }
+        accumulated: { type: integer, format: int64 }
+        referenceCode: { type: string, example: FT24012345678 }
+
+    PaymentWebhookSePayIPN:
+      type: object
+      description: |
+        SePay hosted-gateway IPN. Only `ORDER_PAID` + `CAPTURED` +
+        `APPROVED` settles; `TRANSACTION_VOID` emits `payment.failed`.
+        Authenticated by `X-Secret-Key`, not by a signature.
+      properties:
+        timestamp: { type: integer, format: int64, description: Unix seconds; absent falls back to receipt time. }
+        notification_type: { type: string, example: ORDER_PAID }
+        order:
+          type: object
+          properties:
+            order_invoice_number: { type: string, example: KG7F3K2Q }
+            order_status: { type: string, example: CAPTURED }
+            order_amount: { type: string, example: "1190000.00" }
+            order_currency: { type: string, example: VND }
+        transaction:
+          type: object
+          properties:
+            id: { type: string }
+            transaction_status: { type: string, example: APPROVED }
+            transaction_amount: { type: string, example: "1190000.00" }
+
+    PaymentWebhookPayOS:
+      type: object
+      description: |
+        PayOS webhook. `signature` is the HMAC-SHA256 of the canonical
+        `data` fields keyed with the config's `checksum_key`; there is no
+        signature header. Only `code=00`, `success=true` and
+        `data.code=00` settle. Numbers are exact; `orderCode` is the
+        numeric code, `description` carries the KG code.
+      required: [data, signature]
+      properties:
+        code: { type: string, example: "00" }
+        desc: { type: string }
+        success: { type: boolean }
+        signature: { type: string }
+        data:
+          type: object
+          additionalProperties: true
+          properties:
+            orderCode: { type: integer, format: int64 }
+            amount: { type: integer, format: int64 }
+            description: { type: string, example: KG7F3K2Q }
+            accountNumber: { type: string }
+            reference: { type: string }
+            transactionDateTime: { type: string, example: "2026-11-12 15:04:05" }
+            currency: { type: string, example: VND }
+            paymentLinkId: { type: string }
+            code: { type: string, example: "00" }
+            desc: { type: string }
+            counterAccountBankId: { type: string }
+            counterAccountBankName: { type: string }
+            counterAccountName: { type: string }
+            counterAccountNumber: { type: string }
+            virtualAccountName: { type: string }
+            virtualAccountNumber: { type: string }
