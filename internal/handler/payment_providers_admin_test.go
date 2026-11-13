@@ -22,7 +22,7 @@ func TestProviderAdminNeverReturnsSecrets(t *testing.T) {
 	h := &PaymentProviderAdminHandler{Service: svc}
 
 	code, out := f.call(h.Upsert, "PUT", "/api/v1/admin/payments/providers",
-		`{"provider":"sepay","mode":"live","enabled":true,"config":{"bank_name":"MB Bank","bank_bin":"970422","account_no":"0978482700","account_name":"NGUYEN VAN A"},"credentials":{"api_token":"tok_123"},"webhook_secret":"whsec_123"}`, nil)
+		`{"provider":"sepay","mode":"live","enabled":true,"config":{"bank_name":"MB Bank","bank_bin":"970422","bank_code":"MB","account_no":"0978482700","account_name":"NGUYEN VAN A"},"credentials":{"api_token":"tok_123"},"webhook_secret":"whsec_123"}`, nil)
 	if code != 200 {
 		t.Fatalf("upsert: %d %v", code, out)
 	}
@@ -30,7 +30,7 @@ func TestProviderAdminNeverReturnsSecrets(t *testing.T) {
 	// cannot display it and a stolen session must not recover it from
 	// the save reply.
 	raw := callRaw(f, h.Upsert, "PUT", "/api/v1/admin/payments/providers",
-		`{"provider":"sepay","mode":"live","enabled":true,"config":{"bank_name":"MB Bank","bank_bin":"970422","account_no":"0978482700","account_name":"NGUYEN VAN A"},"credentials":{"api_token":"tok_123"},"webhook_secret":"whsec_123"}`)
+		`{"provider":"sepay","mode":"live","enabled":true,"config":{"bank_name":"MB Bank","bank_bin":"970422","bank_code":"MB","account_no":"0978482700","account_name":"NGUYEN VAN A"},"credentials":{"api_token":"tok_123"},"webhook_secret":"whsec_123"}`)
 	if bytes.Contains(raw, []byte("tok_123")) || bytes.Contains(raw, []byte("whsec_123")) {
 		t.Fatalf("upsert response leaked a secret: %s", raw)
 	}
@@ -116,7 +116,7 @@ func providerHandler(t *testing.T) (*apiFixture, *PaymentProviderAdminHandler) {
 	return f, &PaymentProviderAdminHandler{Service: providercfg.NewService(f.s, codec, "live")}
 }
 
-const validSepayBody = `{"provider":"sepay","mode":"live","enabled":true,"config":{"bank_name":"MB Bank","account_no":"0978482700"},"credentials":{"api_token":"tok_err"},"webhook_secret":"whsec_err"}`
+const validSepayBody = `{"provider":"sepay","mode":"live","enabled":true,"config":{"bank_name":"MB Bank","bank_code":"MB","account_no":"0978482700"},"credentials":{"api_token":"tok_err"},"webhook_secret":"whsec_err"}`
 
 // A rejected save must say why with a stable code: unknown provider and
 // invalid configuration are 400s the admin form can act on, a database
@@ -190,7 +190,7 @@ func TestProviderAdminOmittedEnabledKeepsStored(t *testing.T) {
 	}
 
 	code, out = f.call(h.Upsert, "PUT", "/api/v1/admin/payments/providers",
-		`{"provider":"sepay","mode":"live","config":{"bank_name":"MB Bank","account_no":"222"}}`, nil)
+		`{"provider":"sepay","mode":"live","config":{"bank_name":"MB Bank","bank_code":"MB","account_no":"222"}}`, nil)
 	if code != http.StatusOK {
 		t.Fatalf("update without enabled: %d %v", code, out)
 	}
