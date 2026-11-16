@@ -73,8 +73,9 @@ type Client struct {
 }
 
 // APIError is a PayOS business failure: the call was authenticated, but
-// PayOS refused it with its own code ("01" is "order not found", the
-// rest mean the request or the link state is wrong).
+// PayOS refused it with its own code ("01"/"101" are "payment not
+// found" on the older and current API respectively, the rest mean the
+// request or the link state is wrong).
 type APIError struct {
 	Code string
 	Desc string
@@ -200,7 +201,7 @@ func (c *Client) ConfirmWebhook(ctx context.Context, webhookURL string) error {
 
 // TestConnection proves the credentials without creating money movement.
 // Querying a non-existent order is enough: a 401 means bad keys, and
-// PayOS's "not found" code (01) means they work.
+// PayOS's "not found" codes (01 and 101) mean they work.
 func (c *Client) TestConnection(ctx context.Context) error {
 	if _, err := c.GetPaymentLink(ctx, 1); err != nil && !isNotFound(err) {
 		return err
@@ -312,7 +313,11 @@ func noData(raw json.RawMessage) bool {
 
 func isNotFound(err error) bool {
 	var ae *APIError
-	return errors.As(err, &ae) && ae.Code == "01"
+	// PayOS answers a missing payment link with "01" on the older API
+	// and "101" ("Mã thanh toán không tồn tại") on the current one. Both
+	// prove the credentials were accepted; returning either as a
+	// connection-test failure would mark a healthy account as broken.
+	return errors.As(err, &ae) && (ae.Code == "01" || ae.Code == "101")
 }
 
 func (c *Client) httpClient() *http.Client {

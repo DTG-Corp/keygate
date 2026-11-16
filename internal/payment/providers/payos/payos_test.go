@@ -233,13 +233,15 @@ func TestGetPaymentLinkReturnsAPIError(t *testing.T) {
 }
 
 // TestConnection must distinguish "keys work but the order does not
-// exist" (code 01) from "keys are wrong" (401).
+// exist" (codes 01 and 101) from "keys are wrong" (401).
 func TestConnection(t *testing.T) {
-	notFound := newClient(t, func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"code": "01", "desc": "not found"})
-	})
-	if err := notFound.TestConnection(context.Background()); err != nil {
-		t.Fatalf("not-found order failed the connection test: %v", err)
+	for _, code := range []string{"01", "101"} {
+		notFound := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": code, "desc": "not found"})
+		})
+		if err := notFound.TestConnection(context.Background()); err != nil {
+			t.Fatalf("not-found order (code %s) failed the connection test: %v", code, err)
+		}
 	}
 
 	unauthorized := newClient(t, func(w http.ResponseWriter, r *http.Request) {
