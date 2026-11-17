@@ -196,10 +196,22 @@ func (s *Store) FillPlanIDs(p *model.Plan) {
 }
 
 func (s *Store) CreatePlan(ctx context.Context, p *model.Plan) error {
+	autoCheckoutID := p.CheckoutID == ""
 	s.FillPlanIDs(p)
-	return RunInTx(ctx, s.DB, func(ctx context.Context, tx bun.Tx) error {
-		return CreatePlanIn(ctx, tx, p)
-	})
+	for attempts := 0; attempts < 5; attempts++ {
+		err := RunInTx(ctx, s.DB, func(ctx context.Context, tx bun.Tx) error {
+			return CreatePlanIn(ctx, tx, p)
+		})
+		if err == nil {
+			return nil
+		}
+		if autoCheckoutID && isUniqueViolationOn(err, "idx_plans_checkout_id") {
+			p.CheckoutID = shortID()
+			continue
+		}
+		return err
+	}
+	return errors.New("could not generate unique checkout_id for plan")
 }
 
 // CreatePlanIn writes the plan on a caller's transaction. The caller
