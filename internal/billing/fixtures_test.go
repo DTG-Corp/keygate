@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -215,6 +216,7 @@ func (r *rig) seed(opts seedOpts) *seeded {
 // ─── fakes ───
 
 type fakeMail struct {
+	mu          sync.Mutex
 	notices     []mailCall
 	overdue     []mailCall
 	graces      []mailCall
@@ -228,30 +230,41 @@ type mailCall struct {
 }
 
 func (f *fakeMail) RenderRenewalNotice(product, plan string, days int, payURL string, periodEnd time.Time) (string, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.notices = append(f.notices, mailCall{"", product, plan, payURL, days, periodEnd})
 	return "renewal reminder", "<html><body>reminder</body></html>"
 }
 
 func (f *fakeMail) RenderRenewalOverdue(product, plan, payURL string, periodEnd time.Time) (string, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.overdue = append(f.overdue, mailCall{"", product, plan, payURL, 0, periodEnd})
 	return "payment due", "<html><body>due</body></html>"
 }
 
 func (f *fakeMail) RenderRenewalGrace(product, plan string, days int, payURL string, periodEnd time.Time) (string, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.graces = append(f.graces, mailCall{"", product, plan, payURL, days, periodEnd})
 	return "grace", "<html><body>grace</body></html>"
 }
 
 func (f *fakeMail) RenderRenewalSuspension(product, plan, payURL string, periodEnd time.Time) (string, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.suspensions = append(f.suspensions, mailCall{"", product, plan, payURL, 0, periodEnd})
 	return "suspended", "<html><body>suspended</body></html>"
 }
 
 func (f *fakeMail) sent() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return len(f.notices) + len(f.overdue) + len(f.graces) + len(f.suspensions)
 }
 
 type fakeEvents struct {
+	mu    sync.Mutex
 	calls []eventCall
 }
 
@@ -262,10 +275,14 @@ type eventCall struct {
 }
 
 func (f *fakeEvents) Dispatch(ctx context.Context, productID, event string, data map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, eventCall{ProductID: productID, Event: event, Data: data})
 }
 
 func (f *fakeEvents) byEvent(event string) []eventCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	var out []eventCall
 	for _, c := range f.calls {
 		if c.Event == event {

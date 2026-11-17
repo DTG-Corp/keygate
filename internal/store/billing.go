@@ -283,8 +283,8 @@ func (s *Store) CancelSubscriptionAtPeriodEnd(ctx context.Context, sub *model.Su
 // a suspension this engine made. An operator's suspension stays — money
 // does not override an explicit hold.
 //
-// It is a package function so settlement's payment path can call it
-// inside the transaction that extends the licence.
+// It takes the caller's transaction so settlement's payment path can call
+// it inside the write that extends the licence.
 func (s *Store) ReinstateLicenseForRenewalIn(ctx context.Context, db bun.IDB, licenseID string) (bool, error) {
 	res, err := db.NewUpdate().Model((*model.License)(nil)).
 		Set("status = ?", model.StatusActive).
