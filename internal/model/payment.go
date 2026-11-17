@@ -52,20 +52,25 @@ type PaymentProviderConfig struct {
 type PaymentOrder struct {
 	bun.BaseModel `bun:"table:payment_orders"`
 
-	ID                  string          `bun:",pk" json:"id"`
-	NumericCode         int64           `bun:",nullzero" json:"numeric_code"`
-	Code                string          `bun:",notnull" json:"code"`
-	ProductID           string          `bun:",notnull" json:"product_id"`
-	PlanID              string          `bun:",notnull" json:"plan_id"`
-	PriceID             string          `bun:",nullzero" json:"price_id,omitempty"`
-	LicenseID           string          `bun:",nullzero" json:"license_id,omitempty"`
-	Email               string          `bun:",notnull" json:"email"`
-	Kind                string          `bun:",notnull" json:"kind"`
-	Quantity            int             `bun:",notnull,default:1" json:"quantity"`
-	SubtotalMinor       int64           `bun:",notnull" json:"subtotal_minor"`
-	DiscountMinor       int64           `bun:",notnull" json:"discount_minor"`
-	TaxMinor            int64           `bun:",notnull" json:"tax_minor"`
-	TotalMinor          int64           `bun:",notnull" json:"total_minor"`
+	ID            string `bun:",pk" json:"id"`
+	NumericCode   int64  `bun:",nullzero" json:"numeric_code"`
+	Code          string `bun:",notnull" json:"code"`
+	ProductID     string `bun:",notnull" json:"product_id"`
+	PlanID        string `bun:",notnull" json:"plan_id"`
+	PriceID       string `bun:",nullzero" json:"price_id,omitempty"`
+	LicenseID     string `bun:",nullzero" json:"license_id,omitempty"`
+	Email         string `bun:",notnull" json:"email"`
+	Kind          string `bun:",notnull" json:"kind"`
+	Quantity      int    `bun:",notnull,default:1" json:"quantity"`
+	SubtotalMinor int64  `bun:",notnull" json:"subtotal_minor"`
+	DiscountMinor int64  `bun:",notnull" json:"discount_minor"`
+	TaxMinor      int64  `bun:",notnull" json:"tax_minor"`
+	TotalMinor    int64  `bun:",notnull" json:"total_minor"`
+	// CreditMinor is the unused-time credit an immediate plan upgrade
+	// applied to this order (0 for every other order). It is frozen here
+	// so settlement, the invoice and an operator all read the number the
+	// buyer was charged against.
+	CreditMinor         int64           `bun:",notnull,default:0" json:"credit_minor"`
 	Currency            string          `bun:",notnull" json:"currency"`
 	CurrencyExp         int16           `bun:"currency_exponent,notnull" json:"currency_exponent"`
 	TaxRateBP           int             `bun:",notnull" json:"tax_rate_bp"`

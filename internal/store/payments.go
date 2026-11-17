@@ -73,13 +73,17 @@ type CreateOrderInput struct {
 	Quantity                                int
 	SubtotalMinor, DiscountMinor            int64
 	TaxMinor, TotalMinor                    int64
-	Currency                                string
-	CurrencyExponent                        int16
-	TaxRateBP                               int
-	Provider                                string
-	ExpiresAt                               time.Time
-	Buyer, Metadata                         []byte
-	CreatedByKeyID                          string
+	// CreditMinor is the unused-time credit an immediate plan upgrade
+	// takes off the order. It is stored on the order so a later reader
+	// (settlement, invoice, operator) never re-derives it.
+	CreditMinor      int64
+	Currency         string
+	CurrencyExponent int16
+	TaxRateBP        int
+	Provider         string
+	ExpiresAt        time.Time
+	Buyer, Metadata  []byte
+	CreatedByKeyID   string
 	// LicenseID and PeriodEnd place a renewal order against the licence it
 	// extends. payment_orders_renewal_once allows one pending renewal per
 	// (license_id, period_end), so a caller retrying a renewal must see
@@ -136,6 +140,8 @@ func validateCreateOrderInput(in CreateOrderInput) error {
 		return fmt.Errorf("%w: currency is required", ErrOrderInvalidInput)
 	case in.SubtotalMinor < 0, in.DiscountMinor < 0, in.TaxMinor < 0, in.TotalMinor < 0:
 		return fmt.Errorf("%w: amounts must not be negative", ErrOrderInvalidInput)
+	case in.CreditMinor < 0:
+		return fmt.Errorf("%w: credit_minor must not be negative", ErrOrderInvalidInput)
 	case in.TaxRateBP < 0:
 		return fmt.Errorf("%w: tax_rate_bp must not be negative", ErrOrderInvalidInput)
 	}
@@ -167,7 +173,7 @@ func (s *Store) CreatePaymentOrder(ctx context.Context, in CreateOrderInput) (*m
 			ID: NewID(), Code: orderCode(), ProductID: in.ProductID, PlanID: in.PlanID,
 			PriceID: in.PriceID, Email: in.Email, Kind: in.Kind, Quantity: in.Quantity,
 			SubtotalMinor: in.SubtotalMinor, DiscountMinor: in.DiscountMinor,
-			TaxMinor: in.TaxMinor, TotalMinor: in.TotalMinor,
+			TaxMinor: in.TaxMinor, TotalMinor: in.TotalMinor, CreditMinor: in.CreditMinor,
 			Currency: in.Currency, CurrencyExp: in.CurrencyExponent, TaxRateBP: in.TaxRateBP,
 			Provider: in.Provider, Status: domain.OrderPending, ExpiresAt: in.ExpiresAt,
 			Buyer: buyer, Metadata: metadata, CreatedByKeyID: in.CreatedByKeyID,
