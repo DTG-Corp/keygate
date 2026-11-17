@@ -58,12 +58,7 @@ func TestCancelAtPeriodEndEndsTheSubscription(t *testing.T) {
 	if err := r.run(); err != nil {
 		t.Fatalf("repeat: %v", err)
 	}
-	var audits int
-	if err := r.s.DB.NewRaw("SELECT count(*) FROM audit_logs WHERE entity_id = ? AND action = ?",
-		f.Licence.ID, "subscription_canceled").Scan(context.Background(), &audits); err != nil {
-		t.Fatal(err)
-	}
-	if audits != 1 {
+	if audits := r.waitForAudits(t, f.Licence.ID, "subscription_canceled", 1); audits != 1 {
 		t.Fatalf("cancellation audits = %d, want 1", audits)
 	}
 }

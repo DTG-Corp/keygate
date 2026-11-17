@@ -2,9 +2,11 @@ package billing_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,6 +54,17 @@ func newRig(t *testing.T) *rig {
 // provider, the same shape phase 1a's checkout tests use.
 func (r *rig) useRealCheckout() {
 	r.prod = fake.New("sepay")
+	// The default fake ref is derived from the order code, so a resumed
+	// order would reuse it and trip the attempts' unique index. A real
+	// adapter mints a fresh reference per instruction.
+	var refs atomic.Int64
+	r.prod.CreateFn = func(ctx context.Context, req provider.CreateAttemptRequest) (provider.CreateAttemptResult, error) {
+		return provider.CreateAttemptResult{
+			ProviderRef: fmt.Sprintf("fake-ref-%s-%d", req.OrderCode, refs.Add(1)),
+			QRPayload:   "fake-qr",
+			ExpiresAt:   req.ExpiresAt,
+		}, nil
+	}
 	webhooks := service.NewWebhookService(r.s, discardLogger(), time.Second, 0, true)
 	svc := &checkout.Service{
 		Store: r.s, BaseURL: "https://keygate.test", Webhooks: webhooks,
@@ -388,6 +401,25 @@ type queuedMail struct {
 	To      string `bun:"to_addr"`
 	Subject string `bun:"subject"`
 	Body    string `bun:"body"`
+}
+
+// waitForAudits polls for the audit rows a pass wrote. store.Audit inserts
+// in a goroutine (audit must never block the request), so a test that read
+// straight after the pass would race it.
+func (r *rig) waitForAudits(t *testing.T, entityID, action string, want int) int {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var n int
+		if err := r.s.DB.NewRaw("SELECT count(*) FROM audit_logs WHERE entity_id = ? AND action = ?",
+			entityID, action).Scan(context.Background(), &n); err != nil {
+			t.Fatalf("count audits: %v", err)
+		}
+		if n >= want || time.Now().After(deadline) {
+			return n
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func (r *rig) queued(to string) []queuedMail {
