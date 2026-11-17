@@ -20,7 +20,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useI18n } from "@/i18n"
 import { portalPayments } from "@/lib/api"
 import { formatMoney } from "@/lib/money"
-import { paymentStatusClass, paymentStatusLabel } from "@/lib/payment-status"
+import { paymentKindLabel, paymentStatusClass, paymentStatusLabel } from "@/lib/payment-status"
 import { formatDateVN } from "@/lib/utils"
 
 export default function PortalPaymentDetailPage() {
@@ -119,7 +119,7 @@ export default function PortalPaymentDetailPage() {
             <Badge className={paymentStatusClass(order.status)}>{paymentStatusLabel(order.status, t)}</Badge>
           </h1>
           <p className="text-sm text-muted-foreground">
-            {order.product_name || order.plan_name || t("portal.kind")}
+            {order.product_name || order.plan_name || paymentKindLabel(order.kind, t)}
             {order.plan_name && order.product_name ? ` · ${order.plan_name}` : ""}
           </p>
         </div>
@@ -153,7 +153,7 @@ export default function PortalPaymentDetailPage() {
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle className="text-base">{t("portal.payment_instructions")}</CardTitle>
-            {isPending && (
+            {canPay && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -198,7 +198,7 @@ export default function PortalPaymentDetailPage() {
           </CardHeader>
           <CardContent>
             <dl className="space-y-2 text-sm">
-              <Row label={t("portal.kind")} value={kindLabel(order.kind, t)} />
+              <Row label={t("portal.kind")} value={paymentKindLabel(order.kind, t)} />
               {order.created_at && <Row label={t("portal.orderCreated")} value={formatDateVN(order.created_at)} />}
               {order.expires_at && <Row label={t("portal.orderExpires")} value={formatDateVN(order.expires_at)} />}
               {order.email && <Row label={t("portal.billingEmail")} value={order.email} />}
@@ -252,10 +252,4 @@ function Row({ label, value }: { label: string; value?: string }) {
       <dd className="text-right">{value || "—"}</dd>
     </div>
   )
-}
-
-function kindLabel(kind: string, t: ReturnType<typeof useI18n>["t"]): string {
-  if (kind === "renewal") return t("portal.kind_renewal")
-  if (kind === "upgrade") return t("portal.kind_upgrade")
-  return t("portal.kind_new")
 }

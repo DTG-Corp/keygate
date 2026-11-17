@@ -36,3 +36,11 @@ export function paymentStatusClass(status: string): string {
       return "bg-gray-100 text-gray-800"
   }
 }
+
+// Order kinds share the portal wording, so a compact row without plan or
+// product names still says what the purchase was.
+export function paymentKindLabel(kind: string, t: ReturnType<typeof useI18n>["t"]): string {
+  if (kind === "renewal") return t("portal.kind_renewal")
+  if (kind === "upgrade") return t("portal.kind_upgrade")
+  return t("portal.kind_new")
+}

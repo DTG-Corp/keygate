@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useI18n } from "@/i18n"
 import { portalPayments } from "@/lib/api"
 import { formatMoney } from "@/lib/money"
-import { paymentStatusClass, paymentStatusLabel } from "@/lib/payment-status"
+import { paymentKindLabel, paymentStatusClass, paymentStatusLabel } from "@/lib/payment-status"
 import { formatDateVN } from "@/lib/utils"
 
 // The shipped portal list has no status query parameter, so the filter
@@ -99,7 +99,7 @@ export default function PortalPaymentsPage() {
                     <Badge className={paymentStatusClass(order.status)}>{paymentStatusLabel(order.status, t)}</Badge>
                   </div>
                   <p className="text-sm text-muted-foreground">
-                    {order.product_name || order.plan_name || order.kind}
+                    {order.product_name || order.plan_name || paymentKindLabel(order.kind, t)}
                     {order.plan_name && order.product_name ? ` · ${order.plan_name}` : ""}
                   </p>
                   <p className="text-xs text-muted-foreground">
