@@ -59,6 +59,11 @@ func (f *fakeStorage) Copy(_ context.Context, src, dst string, _ int64) error {
 	return nil
 }
 
+func (f *fakeStorage) Put(_ context.Context, key string, body []byte, _ string) error {
+	f.objects[key] = bytes.Clone(body)
+	return nil
+}
+
 func mustAEAD(t *testing.T) *crypto.AESGCM {
 	t.Helper()
 	key := make([]byte, crypto.MasterKeyBytes)
