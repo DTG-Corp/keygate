@@ -255,3 +255,33 @@ Known limitations recorded at merge:
    scheduled, or settlement to reprice a still-pending renewal order.
 3. Immediate downgrades and zero-charge changes are refused with
    `billing.ErrUpgradeNotChargeable` (no refunds in phase 1b).
+
+### Staging deployment record (2026-11-17)
+
+- Image `keygate:phase1b-r1` built from commit `f1eadfa`; staging
+  `/home/dtg/keygate/docker-compose.yml` now points at it (rollback tag:
+  `keygate:dtg-branding-r3`). Pre-deploy dump:
+  `backups/keygate-stg-pre-phase1b-20261117-114130.dump`.
+- Schema migrations 53 → 58 (billing constraints, invoice/e-invoice,
+  coupon/redemption, portal, upgrade credit); health `ok`, version
+  reports `dev` because the image is built without version ldflags.
+- Acceptance over `https://stg-license.dtgsoft.vn` (test admin and
+  consumer keys inserted as `api_keys` rows, then deleted):
+  coupon `ACPT2114738` (10%) quoted 99,000 → 89,100 VND with 8,100 VAT;
+  order `KG0HHW95` paid 89,100; invoice `KG-2026-000001` issued for the
+  same total, PDF 16,451 bytes starting `%PDF-`, then voided; coupon
+  redemption counted 1 for 9,900; revenue/reconciliation/VAT CSV headers
+  and rows render; admin/portal phase-1b routes are registered behind
+  auth (401 unauthenticated) and the SPA serves
+  `/admin/payments/{coupons,invoices,reports}` and
+  `/portal/{payments,invoices,billing-profile}`; `/api/v1/config` keeps
+  `attribution_text: "Powered by Keygate"` and every response carries
+  `X-Powered-By: Keygate`.
+- `mark-paid` requires a test provider resolution (fail-closed by
+  design). Staging was switched to `PAYMENT_MODE=test` plus a test-mode
+  `payos` row for the settlement step and restored to `live` immediately
+  afterwards; secrets were never printed and the temporary API keys were
+  removed after the run.
+- Production deploy is intentionally not done yet: it needs the
+  operator's go-ahead and a fresh `pg_dump` (phase 1a rollback image and
+  dump stay available).
