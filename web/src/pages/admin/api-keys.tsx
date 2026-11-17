@@ -247,7 +247,7 @@ export default function APIKeysPage() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {t("apiKeys.rotateTitle")} — "{rotating?.name}"
+              {t("apiKeys.rotateTitle")}: "{rotating?.name}"
             </AlertDialogTitle>
             <AlertDialogDescription>{t("apiKeys.rotateConfirm")}</AlertDialogDescription>
           </AlertDialogHeader>

@@ -161,7 +161,7 @@ function PayOrder({ data }: { data: PayStatus }) {
         <Card>
           <CardContent className="space-y-4 pt-6">
             <p className="text-sm text-muted-foreground">{qrImage ? t("pay.qr_hint") : t("pay.checkout_hint")}</p>
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <p className="text-xs font-medium text-muted-foreground">
               {checkoutURL ? t("pay.gateway") : t("pay.bank_transfer")}
             </p>
 
@@ -221,7 +221,7 @@ function PayOrder({ data }: { data: PayStatus }) {
 
       {(data.status === "refunded" || data.status === "partially_refunded") && (
         <p className="rounded-lg border bg-muted p-4 text-sm">
-          <span className="font-medium">{t("pay.refunded")}</span> — {t("pay.refunded_hint")}
+          <span className="font-medium">{t("pay.refunded")}</span>: {t("pay.refunded_hint")}
         </p>
       )}
 

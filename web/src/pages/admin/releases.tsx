@@ -294,7 +294,7 @@ export default function ReleasesPage() {
                   </DataTableCell>
                   <DataTableCell className="text-sm">
                     {artifacts.length === 0 ? (
-                      <span className="text-muted-foreground">—</span>
+                      <span className="text-muted-foreground text-xs">N/A</span>
                     ) : (
                       <span className="font-mono text-xs">
                         {t(artifacts.length === 1 ? "releases.platformCountOne" : "releases.platformCountMany", {

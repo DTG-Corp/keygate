@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Ban,
   BarChart3,
+  ChevronRight,
   Clock,
   Key,
   ShieldOff,
@@ -324,7 +325,7 @@ export default function AnalyticsPage() {
       </div>
 
       {isLoading ? (
-        <div className="animate-pulse space-y-4">
+        <div className="motion-safe:animate-pulse space-y-4">
           <div className="h-32 bg-muted rounded-lg" />
           <div className="h-48 bg-muted rounded-lg" />
         </div>
@@ -919,9 +920,9 @@ export default function AnalyticsPage() {
           {/* Snapshots Raw Data — collapsible */}
           {snapshots.length > 0 && (
             <details className="group">
-              <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-2">
-                <span className="transition-transform group-open:rotate-90">▶</span>
-                {t("analytics.rawData")} — {t("analytics.snapshots")} ({snapTotal})
+              <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm">
+                <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
+                {t("analytics.rawData")}: {t("analytics.snapshots")} ({snapTotal})
               </summary>
               <Card className="mt-3">
                 <CardContent className="pt-4">

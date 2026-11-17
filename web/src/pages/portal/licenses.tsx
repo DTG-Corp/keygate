@@ -1100,7 +1100,7 @@ function QuotaBar({ entitlement, licenseKey }: { entitlement: Entitlement; licen
       <div className={cn("h-2.5 bg-muted rounded-full overflow-hidden", unlimited && "hidden")}>
         <div
           className={cn(
-            "h-full rounded-full transition-all",
+            "h-full rounded-full transition-colors",
             isWarning ? (percentage >= 95 ? "bg-red-500" : "bg-amber-500") : "bg-emerald-500",
           )}
           style={{ width: `${percentage}%` }}

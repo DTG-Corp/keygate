@@ -254,8 +254,8 @@ export default function PlansPage() {
                               p.max_activations
                             )
                           ) : (
-                            <span className="text-muted-foreground" title={t("plans.notApplicableForType")}>
-                              —
+                            <span className="text-muted-foreground text-xs" title={t("plans.notApplicableForType")}>
+                              N/A
                             </span>
                           )}
                         </DataTableCell>
@@ -265,8 +265,8 @@ export default function PlansPage() {
                           ) : supportsSeats ? (
                             p.max_seats || 0
                           ) : (
-                            <span className="text-muted-foreground" title={t("plans.notApplicableForType")}>
-                              —
+                            <span className="text-muted-foreground text-xs" title={t("plans.notApplicableForType")}>
+                              N/A
                             </span>
                           )}
                         </DataTableCell>

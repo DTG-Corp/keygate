@@ -34,6 +34,7 @@ Thumbs.db
 .aider*
 .copilot/
 .superpowers/
+.hallmark/
 
 # Frontend
 web/node_modules/

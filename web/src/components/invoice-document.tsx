@@ -27,9 +27,7 @@ export function InvoiceDocument({
         {(invoice.seller || !hideMissingSeller) && (
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-                {t("invoices.seller")}
-              </CardTitle>
+              <CardTitle className="text-xs font-medium text-muted-foreground">{t("invoices.seller")}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-1 text-sm">
               {invoice.seller ? (
@@ -42,9 +40,7 @@ export function InvoiceDocument({
         )}
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              {t("invoices.buyer")}
-            </CardTitle>
+            <CardTitle className="text-xs font-medium text-muted-foreground">{t("invoices.buyer")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-1 text-sm">
             <BuyerBlock buyer={invoice.buyer} />
@@ -132,7 +128,7 @@ export function InvoiceDocument({
 function BuyerBlock({ buyer }: { buyer: InvoiceBuyer }) {
   const { t } = useI18n()
   const hasAny = buyer.name || buyer.company_name || buyer.tax_code || buyer.address || buyer.email || buyer.phone
-  if (!hasAny) return <p className="text-muted-foreground">—</p>
+  if (!hasAny) return <p className="text-muted-foreground text-xs italic">N/A</p>
   return (
     <>
       {buyer.name && <p className="font-medium">{buyer.name}</p>}

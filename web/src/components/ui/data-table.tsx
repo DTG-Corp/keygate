@@ -46,7 +46,7 @@ const DataTableHead = React.forwardRef<HTMLTableCellElement, React.ThHTMLAttribu
     <th
       ref={ref}
       className={cn(
-        "h-10 whitespace-nowrap px-3 text-left align-middle text-xs font-semibold uppercase tracking-wider text-muted-foreground [&:has([role=checkbox])]:pr-0",
+        "h-9 whitespace-nowrap px-3 text-left align-middle text-xs font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0",
         className,
       )}
       {...props}
@@ -88,8 +88,8 @@ function DataTableSortHead({
         type="button"
         onClick={() => sort.toggle(column, firstOrder)}
         className={cn(
-          "group flex h-10 w-full items-center gap-1 whitespace-nowrap px-3 text-left text-xs font-semibold uppercase tracking-wider transition-colors",
-          active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+          "group flex h-9 w-full items-center gap-1 whitespace-nowrap px-3 text-left text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 rounded-sm active:translate-y-px",
+          active ? "text-foreground font-semibold" : "text-muted-foreground hover:text-foreground",
         )}
       >
         {children}
@@ -217,7 +217,7 @@ function DataTablePagination({
                 key={`ellipsis-${i < pages.length / 2 ? "start" : "end"}`}
                 className="px-1 text-xs text-muted-foreground"
               >
-                ...
+                …
               </span>
             ) : (
               <Button

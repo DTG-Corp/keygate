@@ -182,7 +182,7 @@ export default function LoginPage() {
               <div className="flex justify-between text-xs">
                 <button
                   type="button"
-                  className="text-muted-foreground hover:text-foreground"
+                  className="text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-xs active:translate-y-px"
                   onClick={() => {
                     setOtpStep("email")
                     setOtpCode("")
@@ -193,7 +193,7 @@ export default function LoginPage() {
                 </button>
                 <button
                   type="button"
-                  className="text-muted-foreground hover:text-foreground disabled:opacity-50"
+                  className="text-muted-foreground hover:text-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-xs active:translate-y-px"
                   disabled={otpCooldown > 0}
                   onClick={handleOtpResend}
                 >
@@ -209,7 +209,7 @@ export default function LoginPage() {
               <div className="relative my-4">
                 <Separator />
                 <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-card px-2 text-xs text-muted-foreground">
-                  DEV MODE
+                  Development mode
                 </span>
               </div>
               <form onSubmit={handleDevLogin} className="space-y-3">
