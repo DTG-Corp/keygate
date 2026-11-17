@@ -681,9 +681,9 @@ export default function PaymentCouponEditorPage() {
                       {t("coupons.preview_unavailable")}
                     </p>
                   )}
-                  {draft.type === "trial" && (
+                  {(quote?.trial_days ?? draft.trial_days) > 0 && (
                     <p className="text-xs text-muted-foreground">
-                      {t("coupons.trial_days")}: {draft.trial_days}
+                      {t("coupons.trial_days")}: {quote?.trial_days ?? draft.trial_days}
                     </p>
                   )}
                 </>
