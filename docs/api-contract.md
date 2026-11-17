@@ -244,9 +244,11 @@ it are ignored, not rejected):
   `coupon_codes[]`, `ignore_invalid_coupons` and optional `success_url`
   / `cancel_url` (HTTPS only; used for browser redirects). `renewal`
   without `plan_id` renews the licence's current plan; `upgrade` treats
-  `plan_id` as the target and prices the difference. Coupon and
-  renewal validation is module B's; the exact spelling of its extra
-  response fields is marked **verify after merge** below.
+  `plan_id` as the target and prices the difference. The response adds
+  `discounts[]` (`code`, `type`, `amount_minor`) and priced
+  `subtotal_minor`/`discount_minor`/`tax_minor`/`total_minor`; the
+  `upgrade` kind additionally returns `credit_minor` (prorated unused
+  time on the current plan) once the upgrade slice is wired.
 - `metadata` is stored on the order and never sent to the provider.
 - `Idempotency-Key` is honoured but optional (see **Idempotency**). A
   replay returns the first `201` with `Idempotent-Replayed: true`; the
@@ -594,10 +596,10 @@ inside the same transition as the status change; there is still no
 outbox, so a consumer that missed a delivery reconciles against the
 order/invoice APIs, not a replay log.
 
-**Known phase-1b gap (verify after merge).** The settlement path records
-a provider-reported expiry (PayOS/SePay telling us the order lapsed) as
-`pending -> expired` without emitting `order.expired`; only the
-reconciliation sweep emits it. Settlement code is outside this module.
+**Known phase-1b gap.** The settlement path records a provider-reported
+expiry (PayOS/SePay telling us the order lapsed) as `pending -> expired`
+without emitting `order.expired`; only the reconciliation sweep emits
+it. A consumer that missed an expiry reconciles against the order API.
 
 ### Admin: payments
 
@@ -822,18 +824,27 @@ are the spec's.
 JSON rows use integer minor units and the same
 `currency`/`currency_exponent` pair as the ledger. CSV responses are a
 raw `text/csv` body (`Content-Disposition: attachment`), with a header
-row and one row per group; the columns are module C's — **verify after
-merge**. Revenue includes paid and partially refunded orders net of
-recorded refunds; reconciliation reports unmatched/amount-mismatch
-counts and the drift between the ledger and provider totals; VAT reports
-the tax component, not a second tax charge.
+row and one row per group. Columns:
+
+- revenue: `period, provider, plan_id, plan_name, product_id,
+  product_name, currency, currency_exponent, orders, subtotal_minor,
+  discount_minor, tax_minor, total_minor`
+- reconciliation: `day, provider, currency, orders_count,
+  transactions_count, orders_minor, transactions_minor, drift_minor`
+- VAT: `period, currency, currency_exponent, tax_rate_bp, orders,
+  taxable_base_minor, tax_minor, total_minor`
+
+Revenue includes paid and partially refunded orders net of recorded
+refunds; reconciliation reports unmatched/amount-mismatch counts and the
+drift between the ledger and provider totals; VAT reports the tax
+component, not a second tax charge.
 
 **Settings used by phase 1b** (admin settings API; values are strings)
 
 | Key | Meaning |
 |---|---|
 | `coupon_max_stack` | max amount coupons per order (default 2) |
-| `payment_quote_rate_limit` | quote requests per minute per IP (default 30; spec key — **verify after merge**) |
+| — | the public quote shares the install's API rate-limit bucket (`RATE_LIMIT_API`); the spec's separate `payment_quote_rate_limit` key is not read in phase 1b |
 | `invoice_seller_name`, `invoice_seller_tax_code`, `invoice_seller_address`, `invoice_seller_email` | seller block printed on invoices |
 | `invoice_note` | footer note printed on invoices |
 | `einvoice_provider` | `""` (PDF only) or a configured e-invoice provider key |
@@ -932,13 +943,17 @@ different; code and this contract are the source of truth.
   profile, admin coupon and redemption surfaces, admin invoice issue/void
   and the three reports are registered by the phase-1b wiring; see the
   sections above. `discount_minor` is 0 only when no coupon applied.
-  Module B/C own the exact shapes of quote discounts, coupon rows and
-  report columns; each such block here is marked **verify after merge**.
+  The shapes above match the merged handlers: quote returns
+  `subtotal_minor`/`discount_minor`/`tax_minor`/`total_minor`,
+  `currency`/`currency_exponent`, `billing_interval`, `trial_days` and
+  `discounts[]`; report CSV columns are listed in the reports section.
 - **The billing worker and dunning ladder are phase 1b.** Renewal
   reminders and `license.renewal_due` are dispatched by that worker on
   the plan's `grace_days` and the licence's `valid_until`; the
   `invoice_*` and `einvoice_provider` settings keys are listed above.
-  The worker's defaults are module-owned; verify after merge.
+  Its cadence is one pass per hour; reminder rungs are 7/3/1 days before
+  the period end, dunning rungs 1/3/7 days after it, and a suspended
+  licence gets one suspension notice.
 - **SePay CIDR allowlist deferred.** There is no source-IP check in
   phase 1a/1b; HMAC/apikey (and PayOS's checksum) is the gate.
 - **PayOS confirm-webhook is explicit, and PayOS has no sandbox.** The
