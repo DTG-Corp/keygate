@@ -239,16 +239,16 @@ it are ignored, not rejected):
   both are accepted from old clients. `request_invoice=true` without a
   tax code is `422 PAYMENT_TAX_CODE_REQUIRED`. PayOS receives the
   fields it supports.
-- Phase 1b order create also accepts `kind` (`new`, `renewal`,
-  `upgrade`), `license_id` (required when `kind` is not `new`),
-  `coupon_codes[]`, `ignore_invalid_coupons` and optional `success_url`
-  / `cancel_url` (HTTPS only; used for browser redirects). `renewal`
-  without `plan_id` renews the licence's current plan; `upgrade` treats
-  `plan_id` as the target and prices the difference. The response adds
+- Phase 1b order create adds `coupon_codes[]` and
+  `ignore_invalid_coupons`. The caller cannot choose a `kind` in phase
+  1b: the consumer API creates `new` orders, `renewal` orders are created
+  by the billing engine, and prorated `upgrade` orders by
+  `billing.Service.CreateUpgradeOrder` (no public HTTP surface yet; the
+  portal upgrade route remains the Stripe-era one). The response adds
   `discounts[]` (`code`, `type`, `amount_minor`) and priced
-  `subtotal_minor`/`discount_minor`/`tax_minor`/`total_minor`; the
-  `upgrade` kind additionally returns `credit_minor` (prorated unused
-  time on the current plan) once the upgrade slice is wired.
+  `subtotal_minor`/`discount_minor`/`tax_minor`/`total_minor`; an
+  upgrade order also carries `credit_minor` (prorated unused time on the
+  current plan).
 - `metadata` is stored on the order and never sent to the provider.
 - `Idempotency-Key` is honoured but optional (see **Idempotency**). A
   replay returns the first `201` with `Idempotent-Replayed: true`; the

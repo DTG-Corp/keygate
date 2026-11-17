@@ -30,6 +30,7 @@ import (
 // handler file that the list does not name.
 var paymentSourceFiles = []string{
 	"payments_public.go",
+	"payments_public_quote.go",
 	"payments_api.go",
 	"payments_webhook.go",
 	"payments_admin.go",

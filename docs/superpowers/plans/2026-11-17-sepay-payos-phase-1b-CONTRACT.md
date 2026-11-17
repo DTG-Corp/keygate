@@ -223,3 +223,35 @@ The surface below supersedes the contract where the shipped code chose different
   grace) and `license_suspended`, via a `MailGate` optional interface on `billing.ReminderSender`.
 - `order.expired` is emitted by the expiry sweep (per-row claim) only; settlement's
   provider-reported expiry does not emit it (follow-up).
+
+### Upgrades and trial conversion (merged after the modules)
+
+`internal/billing/upgrades.go` adds `ProrateMinor`, `UpgradeQuote`,
+`QuoteUpgrade` and `CreateUpgradeOrder`; `payment_orders.credit_minor`
+(migration `20261117_05`) freezes the prorated credit on the order, and
+checkout applies it as an extra discount so
+`total = subtotal - discount + tax` still adds up. Settlement gained
+`case "upgrade"` (licence comes from the `license_upgrades` row linked by
+`payment_order_id`), a trial-conversion branch in `settleNew`, renewal
+reinstatement (`ReinstateLicenseForRenewalIn` before the extension) and
+next-cycle application. `plan.changed` fires after commit with reasons
+`paid_change`, `trial_conversion` and `next_cycle_upgrade`.
+
+Known limitations recorded at merge:
+
+1. **No public HTTP surface for upgrades yet.** `CreateUpgradeOrder`
+   requires a licence with a SePay/PayOS subscription, so the Stripe-era
+   `POST /api/v1/portal/licenses/upgrade` route cannot simply be
+   forwarded to it; the engine API is ready for the portal/admin wiring.
+   The consumer `POST /api/v1/payments/orders` deliberately has no `kind`
+   field, so an integrator cannot create an upgrade order whose
+   settlement would fail closed.
+2. **next_cycle renewals can be priced one period early.** The engine
+   creates the renewal order before settlement applies a scheduled
+   next_cycle change, so if the target plan costs more the first renewal
+   can charge the old plan's price while granting the new plan for that
+   period. Immediate mode (the column default) is not affected. Fixing
+   it needs the engine to reprice the pending renewal when the change is
+   scheduled, or settlement to reprice a still-pending renewal order.
+3. Immediate downgrades and zero-charge changes are refused with
+   `billing.ErrUpgradeNotChargeable` (no refunds in phase 1b).
