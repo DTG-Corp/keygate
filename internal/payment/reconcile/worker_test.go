@@ -605,3 +605,51 @@ func TestWorkerTickMemoCodeIsCaseInsensitiveAndTokenBounded(t *testing.T) {
 		t.Fatalf("noise transaction = %q, want unmatched", got)
 	}
 }
+
+// expiryRecorder captures the rows the sweep announced.
+type expiryRecorder struct {
+	orders []*model.PaymentOrder
+}
+
+func (r *expiryRecorder) OrderExpired(_ context.Context, order *model.PaymentOrder) {
+	r.orders = append(r.orders, order)
+}
+
+// One event per order the sweep actually moved. A second pass has
+// nothing left to move, so it must not repeat the announcement.
+func TestWorkerTickEmitsOrderExpiredOnce(t *testing.T) {
+	f := newWorkerFixture(t)
+	order := f.lapsedOrder("expired-event-"+uuid.NewString()+"@example.com", "sepay", f.amount)
+	rec := new(expiryRecorder)
+	w := &reconcile.Worker{Store: f.s, Log: f.log, Events: rec}
+
+	countOrder := func() int {
+		n := 0
+		for _, got := range rec.orders {
+			if got.ID == order.ID {
+				n++
+				if got.Status != domain.OrderExpired {
+					t.Fatalf("emitted status = %q, want expired", got.Status)
+				}
+			}
+		}
+		return n
+	}
+
+	if err := w.Tick(f.ctx); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if n := countOrder(); n != 1 {
+		t.Fatalf("lapsed order emitted %d times, want once (all emitted: %+v)", n, rec.orders)
+	}
+	// The sweep is install-wide and earlier tests leave lapsed rows
+	// behind, so the first tick may announce them too; what must not
+	// happen is a second announcement of anything.
+	first := len(rec.orders)
+	if err := w.Tick(f.ctx); err != nil {
+		t.Fatalf("second tick: %v", err)
+	}
+	if len(rec.orders) != first || countOrder() != 1 {
+		t.Fatalf("second tick re-emitted %d rows, want none", len(rec.orders)-first)
+	}
+}

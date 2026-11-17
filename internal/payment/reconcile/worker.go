@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tabloy/keygate/internal/model"
 	"github.com/tabloy/keygate/internal/payment/domain"
 	"github.com/tabloy/keygate/internal/payment/provider"
 	"github.com/tabloy/keygate/internal/payment/providercfg"
@@ -52,7 +53,11 @@ const (
 // Run calls Tick on an interval; a caller that wants to drive the pass
 // itself (tests, a one-off admin trigger) calls Tick directly.
 type Worker struct {
-	Store      *store.Store
+	Store *store.Store
+	// Events receives one OrderExpired call per order the expiry sweep
+	// moved. It is optional: a worker built without it still closes
+	// lapsed orders, which is the job that must not depend on a webhook.
+	Events     OrderExpiryEmitter
 	Config     *providercfg.Service
 	Matcher    *Matcher
 	Settlement *settlement.Service
@@ -65,6 +70,13 @@ type Worker struct {
 	// row (which is what keeps this package free of stored secrets).
 	QueryPaymentLink func(ctx context.Context, cfg *providercfg.ResolvedConfig, numericCode int64) (*payos.PaymentLink, error)
 	ListTransactions func(ctx context.Context, cfg *providercfg.ResolvedConfig, from, to time.Time, sinceID int64) ([]sepay.BankTransaction, error)
+}
+
+// OrderExpiryEmitter is the part of service.OrderEventEmitter the sweep
+// uses. The narrow interface keeps this package independent of the
+// webhook delivery machinery (and of service's imports).
+type OrderExpiryEmitter interface {
+	OrderExpired(ctx context.Context, order *model.PaymentOrder)
 }
 
 func (w *Worker) logger() *slog.Logger {
@@ -109,8 +121,14 @@ func (w *Worker) Tick(ctx context.Context) error {
 	if w == nil || w.Store == nil {
 		return errors.New("reconcile: worker has no store")
 	}
-	if _, err := w.Store.ExpirePaymentOrders(ctx, time.Now()); err != nil {
+	expired, err := w.Store.ExpirePaymentOrdersWithRows(ctx, time.Now())
+	if err != nil {
 		return err
+	}
+	if w.Events != nil {
+		for _, order := range expired {
+			w.Events.OrderExpired(ctx, order)
+		}
 	}
 	if w.Config == nil || w.Settlement == nil {
 		// A developer install with no encryption key has no provider
