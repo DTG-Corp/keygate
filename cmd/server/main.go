@@ -25,6 +25,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stripe/stripe-go/v82"
 
+	"github.com/tabloy/keygate/internal/billing"
 	"github.com/tabloy/keygate/internal/branding"
 	"github.com/tabloy/keygate/internal/config"
 	"github.com/tabloy/keygate/internal/crypto"
@@ -560,9 +561,31 @@ func main() {
 	})
 
 	expiryChecker := service.NewExpiryChecker(db, emailSvc, webhookSvc, logger)
+	// Phase 1b: the billing engine owns renewals, dunning and suspension
+	// for SePay/PayOS subscriptions. It needs ctx, which exists below, so
+	// it is built here and started next to the other long-lived loops.
+	billingSvc := billing.New(billing.Deps{
+		Store: db, Checkout: checkoutSvc, Email: emailSvc, Webhook: webhookSvc,
+		Logger: logger, BaseURL: cfg.BaseURL,
+	})
 	if cfg.StripeSecretKey != "" {
 		expiryChecker.EndPastDueUpgrade = stripeH.EndPastDueUpgrade
 		expiryChecker.EndGraceExpiredUpgrade = stripeH.EndGraceExpiredUpgrade
+	}
+	// The generic grace sweep runs before the billing pass and would
+	// expire a licence the engine is still holding in dunning; the
+	// engine's answer wins, and a licence it does not manage (or has
+	// closed) falls through to the Stripe hook and then the sweep.
+	prevGraceEnd := expiryChecker.EndGraceExpiredUpgrade
+	expiryChecker.EndGraceExpiredUpgrade = func(ctx context.Context, lic *model.License, cutoff time.Time) (bool, error) {
+		handled, err := billingSvc.EndGraceExpiredLicense(ctx, lic, cutoff)
+		if handled || err != nil {
+			return handled, err
+		}
+		if prevGraceEnd != nil {
+			return prevGraceEnd(ctx, lic, cutoff)
+		}
+		return false, nil
 	}
 	meteredSyncer := service.NewMeteredBillingSyncer(db, logger)
 	adminH := handler.NewAdminHandler(db, webhookSvc, emailSvc, expiryChecker, meteredSyncer)
@@ -659,6 +682,7 @@ func main() {
 	}
 
 	go expiryChecker.StartExpiryLoop(ctx)
+	go billingSvc.Run(ctx)
 
 	// Metered billing sync. 5-minute cadence — Stripe aggregates
 	// server-side so sub-minute polling burns rate budget for no

@@ -83,7 +83,7 @@ func (s *Service) markPastDueAndMail(ctx context.Context, sub *model.Subscriptio
 	daysLate := ceilClock(end, now)
 	if daysLate <= 1 {
 		tag := "renewal_due:" + end.Format(time.RFC3339)
-		return s.queueMail(ctx, fresh.License, tag, func() (string, string) {
+		return s.queueMail(ctx, fresh.License, "payment_failed", tag, func() (string, string) {
 			return s.deps.Email.RenderRenewalOverdue(
 				productName(fresh.License), planName(sub.Plan), s.portalURL(), end)
 		})
@@ -94,7 +94,7 @@ func (s *Service) markPastDueAndMail(ctx context.Context, sub *model.Subscriptio
 	}
 	daysLeft := ceilClock(now, graceEnd)
 	tag := fmt.Sprintf("renewal_grace_%d:%s", rung, end.Format(time.RFC3339))
-	return s.queueMail(ctx, fresh.License, tag, func() (string, string) {
+	return s.queueMail(ctx, fresh.License, "payment_failed", tag, func() (string, string) {
 		return s.deps.Email.RenderRenewalGrace(
 			productName(fresh.License), planName(sub.Plan), daysLeft, s.portalURL(), end)
 	})
@@ -148,7 +148,7 @@ func (s *Service) suspendIfDue(ctx context.Context, sub *model.Subscription, lic
 		return nil
 	}
 	tag := "renewal_suspended:" + end.Format(time.RFC3339)
-	return s.queueMail(ctx, fresh.License, tag, func() (string, string) {
+	return s.queueMail(ctx, fresh.License, "license_suspended", tag, func() (string, string) {
 		return s.deps.Email.RenderRenewalSuspension(
 			productName(fresh.License), planName(sub.Plan), s.portalURL(), end)
 	})

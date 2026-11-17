@@ -204,7 +204,7 @@ func (s *EmailService) getTemplate(key, defaultTmpl string) string {
 
 // DefaultTemplates returns all default email templates keyed by their setting suffix.
 func DefaultTemplates() map[string]string {
-	return map[string]string{
+	out := map[string]string{
 		"license_created":   tmplLicenseCreated,
 		"license_expiring":  tmplLicenseExpiring,
 		"updates_ending":    tmplUpdatesEnding,
@@ -216,6 +216,12 @@ func DefaultTemplates() map[string]string {
 		"admin_invite":      tmplAdminInvite,
 		"payment_failed":    tmplPaymentFailed,
 	}
+	// Phase 1b's renewal ladder owns four bodies of its own; merging them
+	// here is what makes them editable in the dashboard.
+	for k, v := range DefaultRenewalTemplates() {
+		out[k] = v
+	}
+	return out
 }
 
 func (s *EmailService) Send(to, subject, htmlBody string) error {

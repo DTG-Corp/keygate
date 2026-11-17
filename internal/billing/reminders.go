@@ -58,7 +58,7 @@ func (s *Service) sendReminders(ctx context.Context, sub *model.Subscription, li
 	}
 	daysLeft := ceilClock(now, end)
 	tag := fmt.Sprintf("renewal_reminder_%d:%s", rung, end.Format(time.RFC3339))
-	return s.queueMail(ctx, lic, tag, func() (string, string) {
+	return s.queueMail(ctx, lic, "renewal_reminder", tag, func() (string, string) {
 		return s.deps.Email.RenderRenewalNotice(productName(lic), planName(sub.Plan), daysLeft, s.portalURL(), end)
 	})
 }
@@ -82,8 +82,30 @@ func reminderRung(daysLeft int) int {
 // it with the claim closed in one transaction. The claim is the dedupe:
 // two replicas reaching the same rung, or a restart in the same hour,
 // cannot queue it twice.
-func (s *Service) queueMail(ctx context.Context, lic *model.License, tag string, render func() (subject, body string)) error {
+// MailGate is the dashboard's on/off switch for an automated mail kind.
+// service.EmailService implements it; an implementation that does not is
+// treated as "enabled", so a test double need not carry the whole
+// notification settings surface.
+type MailGate interface {
+	NotifyEnabled(kind string) bool
+}
+
+// mailAllowed reports whether the install still sends this kind of mail.
+func (s *Service) mailAllowed(kind string) bool {
+	if s.deps.Email == nil {
+		return false
+	}
+	if gate, ok := s.deps.Email.(MailGate); ok {
+		return gate.NotifyEnabled(kind)
+	}
+	return true
+}
+
+func (s *Service) queueMail(ctx context.Context, lic *model.License, kind, tag string, render func() (subject, body string)) error {
 	if lic == nil || lic.Email == "" {
+		return nil
+	}
+	if !s.mailAllowed(kind) {
 		return nil
 	}
 	token, err := s.deps.Store.ClaimNotification(ctx, lic.ID, tag)
