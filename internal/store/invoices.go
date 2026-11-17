@@ -345,3 +345,23 @@ func (s *Store) SetInvoiceEInvoice(ctx context.Context, id, provider, ref, statu
 	}
 	return nil
 }
+
+// Invoice-related settings (spec §3.8, §3.11). They are read with the
+// existing settings store; a missing row is the documented default, not
+// an error. The keys live here because the invoice service and the PDF
+// renderer both read them.
+const (
+	SettingInvoiceSellerName    = "invoice_seller_name"
+	SettingInvoiceSellerTaxCode = "invoice_seller_tax_code"
+	SettingInvoiceSellerAddress = "invoice_seller_address"
+	SettingInvoiceSellerEmail   = "invoice_seller_email"
+	SettingInvoiceNote          = "invoice_note"
+	SettingEInvoiceProvider     = "einvoice_provider"
+	// SettingAttributionURL overrides the branding URL the PDF footer and
+	// web pages link to. The text itself stays branding.Tagline: it is a
+	// licence obligation (AGPL v3 §7(b)), not a configurable string.
+	SettingAttributionURL = "attribution_url"
+	// SettingLanguage is the install language; "vi" switches the invoice
+	// PDF labels to Vietnamese.
+	SettingLanguage = "language"
+)
