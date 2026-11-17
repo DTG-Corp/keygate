@@ -5,6 +5,7 @@ import { Link } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { DataTablePagination } from "@/components/ui/data-table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useI18n } from "@/i18n"
 import { portalPayments } from "@/lib/api"
@@ -20,12 +21,26 @@ const STATUSES = ["pending", "paid", "expired", "canceled", "refunded"] as const
 export default function PortalPaymentsPage() {
   const { t } = useI18n()
   const [status, setStatus] = useState("all")
+  const [page, setPage] = useState(0)
+  const pageSize = 20
   const { data, isLoading, error } = useQuery({
-    queryKey: ["portal", "payments", "orders"],
-    queryFn: () => portalPayments.orders({ limit: 100 }),
+    queryKey: ["portal", "payments", "orders", page],
+    queryFn: () => portalPayments.orders({ limit: pageSize, offset: page * pageSize }),
   })
   const loaded = data?.orders ?? []
-  const orders = status === "all" ? loaded : loaded.filter((order) => order.status === status)
+  // The shipped list has no status parameter, so the filter applies to
+  // this page only. Refunded and partially_refunded share one label and
+  // one filter option.
+  const orders =
+    status === "all"
+      ? loaded
+      : loaded.filter((order) =>
+          status === "refunded"
+            ? order.status === "refunded" || order.status === "partially_refunded"
+            : order.status === status,
+        )
+  const total = data?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   return (
     <div className="space-y-6">
@@ -39,7 +54,13 @@ export default function PortalPaymentsPage() {
           <label htmlFor="portal-order-status" className="text-sm font-medium">
             {t("common.status")}
           </label>
-          <Select value={status} onValueChange={setStatus}>
+          <Select
+            value={status}
+            onValueChange={(value) => {
+              setStatus(value)
+              setPage(0)
+            }}
+          >
             <SelectTrigger id="portal-order-status" className="w-44">
               <SelectValue />
             </SelectTrigger>
@@ -102,6 +123,16 @@ export default function PortalPaymentsPage() {
             </Card>
           ))}
         </div>
+      )}
+
+      {!isLoading && !error && total > 0 && (
+        <DataTablePagination
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          pageSize={pageSize}
+          onPageChange={setPage}
+        />
       )}
     </div>
   )

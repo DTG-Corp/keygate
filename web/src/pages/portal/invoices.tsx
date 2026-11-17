@@ -6,6 +6,7 @@ import { showToast } from "@/components/toast"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { DataTablePagination } from "@/components/ui/data-table"
 import { useI18n } from "@/i18n"
 import { portalInvoices } from "@/lib/api"
 import { saveBlob } from "@/lib/download"
@@ -15,11 +16,15 @@ import { formatDateVN } from "@/lib/utils"
 
 export default function PortalInvoicesPage() {
   const { t } = useI18n()
+  const [page, setPage] = useState(0)
+  const pageSize = 20
   const { data, isLoading, error } = useQuery({
-    queryKey: ["portal", "invoices"],
-    queryFn: () => portalInvoices.list({ limit: 100 }),
+    queryKey: ["portal", "invoices", page],
+    queryFn: () => portalInvoices.list({ limit: pageSize, offset: page * pageSize }),
   })
   const invoices = data?.invoices ?? []
+  const total = data?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const [downloading, setDownloading] = useState<string | null>(null)
 
   const download = async (id: string, number: string) => {
@@ -105,6 +110,16 @@ export default function PortalInvoicesPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {!isLoading && !error && total > 0 && (
+        <DataTablePagination
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          pageSize={pageSize}
+          onPageChange={setPage}
+        />
       )}
     </div>
   )
