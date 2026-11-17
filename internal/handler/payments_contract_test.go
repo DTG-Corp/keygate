@@ -36,6 +36,7 @@ var paymentSourceFiles = []string{
 	"payment_providers_admin.go",
 	"plan_prices_admin.go",
 	"payments_invoices_admin.go",
+	"payments_api_invoices.go",
 }
 
 // paymentCode pins one documented code to its one status.
