@@ -35,6 +35,9 @@ var paymentSourceFiles = []string{
 	"payments_admin.go",
 	"payment_providers_admin.go",
 	"plan_prices_admin.go",
+	"payments_invoices_admin.go",
+	"payments_api_invoices.go",
+	"payments_reports_admin.go",
 }
 
 // paymentCode pins one documented code to its one status.
@@ -104,9 +107,9 @@ var paymentVocabulary = map[string]paymentCode{
 	"PAYMENT_COUPON_NOT_STACKABLE":  {status: 422, emitted: false},
 	"PAYMENT_COUPON_TRIAL_MIXED":    {status: 422, emitted: false},
 	"PAYMENT_COUPON_ASSIGNED":       {status: 422, emitted: false},
-	"INVOICE_NOT_FOUND":             {status: 404, emitted: false},
-	"INVOICE_ALREADY_ISSUED":        {status: 409, emitted: false},
-	"EINVOICE_PROVIDER_ERROR":       {status: 502, emitted: false},
+	"INVOICE_NOT_FOUND":             {status: 404, emitted: true},
+	"INVOICE_ALREADY_ISSUED":        {status: 409, emitted: true},
+	"EINVOICE_PROVIDER_ERROR":       {status: 502, emitted: true},
 
 	// The webhook routes answer 401 with this code and a bare 400 for a
 	// body the adapter cannot decode. See TestPaymentWebhookAuthWritesCode.
@@ -145,6 +148,15 @@ var fixedResponseCodes = map[string]struct {
 // below so a new error helper cannot slip past this scan.
 var successResponseWriters = map[string]bool{
 	"OK": true, "Created": true, "NoContent": true, "Array": true,
+}
+
+// sideChannelResponseHelpers neither write a status nor a code: they
+// record why a reply the handler builds itself failed. The scan allows
+// them so an operator still gets the cause of a mapped error (an invoice
+// handler answers 502 EINVOICE_PROVIDER_ERROR and logs the vendor's
+// reason this way).
+var sideChannelResponseHelpers = map[string]bool{
+	"LogInternal": true,
 }
 
 type errorSite struct {
@@ -288,7 +300,7 @@ func scanPaymentErrorSites(t *testing.T) ([]errorSite, map[string]int) {
 			default:
 				fixed, ok := fixedResponseCodes[sel.Sel.Name]
 				if !ok {
-					if !successResponseWriters[sel.Sel.Name] {
+					if !successResponseWriters[sel.Sel.Name] && !sideChannelResponseHelpers[sel.Sel.Name] {
 						scanErr = pos.String() + ": response." + sel.Sel.Name + " is not an error writer this scan understands"
 						return false
 					}
