@@ -15,7 +15,7 @@
 
 | # | Decision | Choice |
 |---|---|---|
-| D1 | Revenue model for VN customers | **Subscriptions + one-time/perpetual**, with a Keygate-owned billing engine (neither SePay nor PayOS has recurring billing) |
+| D1 | Revenue model for VN customers | **Subscriptions + one-time/perpetual**, with a DSoft-owned billing engine (neither SePay nor PayOS has recurring billing) |
 | D2 | How other services consume payments | **Hybrid**: hosted payment page by default + headless API so a service can render its own QR/VA UI |
 | D3 | Merchant / revenue routing | **Default merchant for the install + optional per-product override** (`product_id` nullable from day one) |
 | D4 | Phase-1 must-haves | Core order/checkout/settlement/reconcile + billing engine, **VAT invoices (PDF + manual issue; e-invoice vendor deferred)**, **customer portal**, **coupons + tax/reconciliation reports**. Cards, per-order VA, payout, full refund workflow are phase 2 |
@@ -35,7 +35,7 @@ Non-negotiable constraints carried from the existing project:
 
 ## 1. Context
 
-Keygate is a self-hosted license platform. Today the only payment integration is Stripe:
+DSoft is a self-hosted license platform. Today the only payment integration is Stripe:
 
 - `plans` has **no money columns**; the Stripe Price referenced by `plans.stripe_price_id` is
   the source of truth (`internal/handler/plans_public.go`).
@@ -60,7 +60,7 @@ SePay and PayOS are Vietnamese **payment rails**, not billing engines:
 - SePay webhooks are retried for ~33 minutes and then dropped (>5 h never retried); PayOS
   retry policy is undocumented. **Reconciliation is mandatory, not optional.**
 
-Therefore Keygate must own: prices, order lifecycle, billing cycles, dunning, invoices,
+Therefore DSoft must own: prices, order lifecycle, billing cycles, dunning, invoices,
 reconciliation and refunds — and treat providers as interchangeable settlement rails.
 
 ---
@@ -71,7 +71,7 @@ reconciliation and refunds — and treat providers as interchangeable settlement
 
 1. Sell subscription, perpetual and trial plans to Vietnamese customers paying by bank transfer
    (VietQR), NAPAS QR, and later cards.
-2. Make Keygate the single place that owns money and licences: orders, payments, refunds,
+2. Make DSoft the single place that owns money and licences: orders, payments, refunds,
    invoices, reconciliation, and the licence state they produce.
 3. Expose a stable, documented API + outbound events so other internal services can create
    payments, read licences/entitlements, and react to payment outcomes without knowing which
@@ -145,7 +145,7 @@ unit-tested and a fake provider can drive settlement/reconcile tests.
 type Capabilities struct {
     HostedCheckout  bool // can redirect the customer to a provider-hosted page
     EmbeddedForm    bool // can be embedded in a service UI
-    StaticQR        bool // QR can be rendered by Keygate without a provider API call
+    StaticQR        bool // QR can be rendered by DSoft without a provider API call
     VirtualAccount  bool // per-order VA supported
     Cards           bool
     Refund          bool
@@ -317,7 +317,7 @@ operator visibility.
 
 ### 3.6 Billing engine (VN subscriptions)
 
-Because providers cannot charge automatically, Keygate generates a new order each cycle.
+Because providers cannot charge automatically, DSoft generates a new order each cycle.
 
 - Hourly worker (`billing.Run`) scans active subscription licences whose
   `subscriptions.current_period_end` falls inside the plan's renewal lead window and that have
@@ -403,7 +403,7 @@ type EInvoiceProvider interface {
 
 ### 3.9 Coupons
 
-Coupons are marketing discounts owned by Keygate. Two families exist: **shared codes**
+Coupons are marketing discounts owned by DSoft. Two families exist: **shared codes**
 (`stack_group = general` or `campaign`) and **private codes** (`stack_group = private`, optionally
 bound to one buyer email) — so a general campaign code and a hand-out code for a single customer
 can be combined on the same order.
@@ -894,7 +894,7 @@ production `pay.sepay.vn` / `pgapi.sepay.vn` / `userapi.sepay.vn/v2`.
 
 **B. Hosted gateway (VietQR/NAPAS in phase 1; cards phase 2).**
 
-- Create: form POST (auto-submit HTML page served by Keygate) to
+- Create: form POST (auto-submit HTML page served by DSoft) to
   `<checkout host>/v1/checkout/init` with fields:
   `merchant`, `currency=VND`, `order_amount` (integer VND), `operation=PURCHASE`,
   `order_description`, `order_invoice_number=<order code>` (must be unique),
@@ -1058,11 +1058,11 @@ Response `201`:
       {"code": "ACME10", "type": "fixed", "amount": 100000}
     ],
     "expires_at": "2026-11-12T17:00:00+07:00",
-    "checkout_url": "https://keygate.example.com/pay/KG7F3K2Q",
-    "status_url": "https://keygate.example.com/api/v1/payments/orders/KG7F3K2Q",
+    "checkout_url": "https://dsoft.example.com/pay/KG7F3K2Q",
+    "status_url": "https://dsoft.example.com/api/v1/payments/orders/KG7F3K2Q",
     "qr_payload": "000201010212…",
     "va_number": "",
-    "bank_account": { "bank": "MB", "account_number": "0978482700", "account_name": "CONG TY TNHH KEYGATE" }
+    "bank_account": { "bank": "MB", "account_number": "0978482700", "account_name": "CONG TY TNHH DSOFT" }
   }
 }
 ```
@@ -1504,6 +1504,6 @@ Decisions taken with the product owner on 2026-11-12; no open questions remain:
 - PayOS: `payos.vn/docs/*` (checkout, webhook signature, return URL, test environment,
   payout API), `github.com/payOSHQ/payos-lib-golang` (types + crypto reference),
   `@payos/node` 2.0.5 types.
-- Keygate: `internal/model/model.go`, `internal/payment/stripe.go`,
+- DSoft: `internal/model/model.go`, `internal/payment/stripe.go`,
   `internal/store/store.go`, `internal/handler/plans_public.go`, `internal/handler/admin.go`,
   `internal/middleware/*`, `db/migrations/*`, `docs/api-contract.md`, `docs/openapi.yaml`.

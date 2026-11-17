@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
 )
 
 // Config is one resolved provider config row. Secrets arrive decrypted

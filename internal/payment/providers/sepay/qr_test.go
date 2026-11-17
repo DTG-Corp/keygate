@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/payment/providers/sepay"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/sepay"
 )
 
 func TestBuildQRImageURL(t *testing.T) {

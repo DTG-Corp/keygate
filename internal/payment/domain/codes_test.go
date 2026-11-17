@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
 )
 
 // Crockford Base32 excludes I, L, O and U so a code read aloud or typed

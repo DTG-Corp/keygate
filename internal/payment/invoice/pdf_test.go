@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/storage"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/storage"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // ─── storage double ───
@@ -120,8 +120,8 @@ func sampleDocument() pdfDocument {
 		},
 		Order: &model.PaymentOrder{Code: "KG-7F3K2Q", Provider: "sepay"},
 		Seller: Seller{
-			Name: "Công ty TNHH Keygate", TaxCode: "0312345678",
-			Address: "12 Nguyễn Huệ, Quận 1, TP. Hồ Chí Minh", Email: "billing@keygate.app",
+			Name: "Công ty TNHH DSoft", TaxCode: "0312345678",
+			Address: "12 Nguyễn Huệ, Quận 1, TP. Hồ Chí Minh", Email: "billing@dsoft.app",
 		},
 		Note:            "Cảm ơn quý khách đã thanh toán.",
 		Vi:              true,

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // A customer's subscriptions are found through their licences: nothing

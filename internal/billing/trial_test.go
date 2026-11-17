@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // The trial conversion is a kind new order (spec §3.4) created inside the

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/providercfg"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 // newSepayValidator returns a service plus a fresh product, so every slot

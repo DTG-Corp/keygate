@@ -7,9 +7,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/pkg/apperr"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/pkg/apperr"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 // SetupHandler manages the first-run setup wizard.

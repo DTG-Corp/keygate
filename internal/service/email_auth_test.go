@@ -97,7 +97,7 @@ func TestSendOnce_AuthPickerMatrix(t *testing.T) {
 				port:     fmt.Sprintf("%d", srv.Port()),
 				username: tc.username,
 				password: "s3cret",
-				from:     "noreply@keygate.test",
+				from:     "noreply@dsoft.test",
 				enabled:  true,
 				logger:   slog.Default(),
 				// Test-only: the mock server presents an ephemeral
@@ -150,7 +150,7 @@ func TestSendOnce_RejectsBadLoginCredentials(t *testing.T) {
 		port:      fmt.Sprintf("%d", srv.Port()),
 		username:  "alice",
 		password:  "WRONG-PASSWORD",
-		from:      "noreply@keygate.test",
+		from:      "noreply@dsoft.test",
 		enabled:   true,
 		logger:    slog.Default(),
 		tlsConfig: &tls.Config{ServerName: "127.0.0.1", InsecureSkipVerify: true}, //nolint:gosec
@@ -253,9 +253,9 @@ func TestValidateSMTPLine(t *testing.T) {
 func TestParseEnvelopeAddress(t *testing.T) {
 	ok := []struct{ in, want string }{
 		{"noreply@example.com", "noreply@example.com"},
-		{"Keygate <noreply@example.com>", "noreply@example.com"},
-		{`"Keygate Billing" <billing@example.com>`, "billing@example.com"},
-		{"  Keygate <noreply@example.com>  ", "noreply@example.com"},
+		{"DSoft <noreply@example.com>", "noreply@example.com"},
+		{`"DSoft Billing" <billing@example.com>`, "billing@example.com"},
+		{"  DSoft <noreply@example.com>  ", "noreply@example.com"},
 		{"a.b+tag@sub.example.co.uk", "a.b+tag@sub.example.co.uk"},
 	}
 	for _, tc := range ok {
@@ -579,7 +579,7 @@ func TestSendOnce_ImplicitTLS(t *testing.T) {
 				port:     "465", // selects the implicit-TLS path
 				username: "alice",
 				password: "s3cret",
-				from:     "noreply@keygate.test",
+				from:     "noreply@dsoft.test",
 				enabled:  true,
 				logger:   slog.Default(),
 				//nolint:gosec // the mock's certificate is self-signed
@@ -619,7 +619,7 @@ func TestSendOnce_StartTLSStillUsedOn587(t *testing.T) {
 		port:     "587",
 		username: "alice",
 		password: "s3cret",
-		from:     "noreply@keygate.test",
+		from:     "noreply@dsoft.test",
 		enabled:  true,
 		logger:   slog.Default(),
 		//nolint:gosec // the mock's certificate is self-signed

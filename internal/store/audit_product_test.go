@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // An audit line records the product its entity belongs to, two steps

@@ -19,9 +19,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/storage"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/storage"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // EventEmitter is the outbound webhook seam. *service.WebhookService

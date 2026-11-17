@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // sendReminders mails the pre-expiry ladder: seven days out, three days

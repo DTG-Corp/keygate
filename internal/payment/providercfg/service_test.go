@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/providercfg"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 func TestMain(m *testing.M) { os.Exit(testdb.Main(m, "../../../db/migrations")) }

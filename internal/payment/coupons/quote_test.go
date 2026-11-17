@@ -3,7 +3,7 @@ package coupons
 import (
 	"testing"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // coupon builds an active, stackable coupon with the fields the engine

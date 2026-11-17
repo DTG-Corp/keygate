@@ -12,10 +12,10 @@ import (
 
 	"github.com/go-pdf/fpdf"
 
-	"github.com/tabloy/keygate/internal/branding"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/storage"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/branding"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/storage"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // notoSansTTF is Noto Sans Regular (OFL-1.1), embedded so a PDF renders

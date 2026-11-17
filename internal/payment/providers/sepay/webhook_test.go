@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/providers/sepay"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/sepay"
 )
 
 const sepayBody = `{"id":92704,"gateway":"MB Bank","transactionDate":"2026-11-12 15:04:05","accountNumber":"0978482700","subAccount":"","code":"KG7F3K2Q","content":"KG7F3K2Q chuyen tien","transferType":"in","description":"NGUYEN VAN A chuyen tien","transferAmount":1190000,"accumulated":105000000,"referenceCode":"FT24012345678"}`

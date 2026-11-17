@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
 )
 
 // ErrWebhookUnauthorized reports a webhook whose checksum is missing,

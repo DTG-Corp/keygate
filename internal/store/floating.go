@@ -9,7 +9,7 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // stoppedStatuses are the statuses whose licence holds no floating

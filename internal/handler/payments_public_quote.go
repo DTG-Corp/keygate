@@ -7,9 +7,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/middleware"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/middleware"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 // PublicQuoteRoute is the unauthenticated dry-run price (spec §6.1). It is

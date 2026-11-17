@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // A pause Stripe already made, read again, is written again: it keeps the

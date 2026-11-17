@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // Reset zeroes the counter named by its period and period key, and no

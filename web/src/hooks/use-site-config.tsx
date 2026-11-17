@@ -1,6 +1,8 @@
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react"
 import { site } from "@/lib/api"
 
+const LOCALE_STORAGE_KEY = "dsoft_locale"
+
 interface SiteConfig {
   site_name: string
   brand_color: string
@@ -13,7 +15,7 @@ interface SiteConfig {
 }
 
 const defaults: SiteConfig = {
-  site_name: "Keygate",
+  site_name: "DSoft",
   brand_color: "",
   logo_url: "",
   timezone: "UTC",
@@ -33,7 +35,7 @@ export function SiteConfigProvider({ children }: { children: ReactNode }) {
       .config()
       .then((data) => {
         setConfig({
-          site_name: data.site_name || "Keygate",
+          site_name: data.site_name || "DSoft",
           brand_color: data.brand_color || "",
           logo_url: data.logo_url || "",
           timezone: data.timezone || "UTC",
@@ -58,9 +60,10 @@ export function SiteConfigProvider({ children }: { children: ReactNode }) {
         if (data.site_name) {
           document.title = data.site_name
         }
-        // Set default language if user hasn't explicitly chosen one
-        if (data.language && !localStorage.getItem("keygate_locale")) {
-          localStorage.setItem("keygate_locale", data.language)
+        // Set default language if user hasn't explicitly chosen one.
+        const storedLocale = localStorage.getItem(LOCALE_STORAGE_KEY)
+        if (data.language && !storedLocale) {
+          localStorage.setItem(LOCALE_STORAGE_KEY, data.language)
           document.documentElement.lang = data.language
         }
       })

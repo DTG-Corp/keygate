@@ -10,11 +10,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/pkg/apperr"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/service"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/pkg/apperr"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 type WebhookAdminHandler struct {
@@ -272,7 +272,7 @@ func (h *WebhookAdminHandler) GetDelivery(c *gin.Context) {
 // the receiver was down / mis-configured and the admin wants to
 // replay an event without trying to recreate the original action.
 // The replay carries the SAME payload bytes (so receiver-side
-// idempotency keys still match) but a fresh X-Keygate-Delivery and
+// idempotency keys still match) but a fresh X-DSoft-Delivery and
 // a new row in the deliveries table so retry counters are clean.
 func (h *WebhookAdminHandler) ResendDelivery(c *gin.Context) {
 	wh, ok := h.checkWebhookScope(c, c.Param("id"))

@@ -12,12 +12,12 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/tabloy/keygate/internal/license"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/license"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/service"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // ErrOrderAlreadySettled is the answer callers may expect when an order

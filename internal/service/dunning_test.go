@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // dunningFixture is a subscription product whose past-due licences the
@@ -65,7 +65,7 @@ func (f *dunningFixture) pastDue(days int) *model.License {
 
 func (f *dunningFixture) checker(smtpAddr string) *ExpiryChecker {
 	host, port, _ := net.SplitHostPort(smtpAddr)
-	return NewExpiryChecker(f.s, NewEmailService(host, port, "", "", "keygate@test.local", slog.Default(), f.s), nil, slog.Default())
+	return NewExpiryChecker(f.s, NewEmailService(host, port, "", "", "dsoft@test.local", slog.Default(), f.s), nil, slog.Default())
 }
 
 // queued is the subjects of the mails waiting in the queue for to.

@@ -12,12 +12,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/service"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 // PortalOrderPayer is the checkout surface the portal's Pay action uses.

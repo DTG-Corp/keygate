@@ -71,7 +71,7 @@ If the implementer's in-flight `service.go` is further along than Task 4, keep i
 
 ## Global Constraints
 
-- Module path `github.com/tabloy/keygate`; Go 1.27; Gin 1.12; Bun + PostgreSQL. Run `go build ./... && go vet ./...` before every commit.
+- Module path `github.com/dtg-corp/dsoft`; Go 1.27; Gin 1.12; Bun + PostgreSQL. Run `go build ./... && go vet ./...` before every commit.
 - Every ID is a TEXT UUID (`store.NewID()`); every FK is TEXT; never BIGSERIAL.
 - Money is integer minor units + `currency` + `currency_exponent` (VND 0, USD 2). **Never floats** — not even for a percentage or a proration factor. All proration is integer arithmetic with explicit rounding.
 - Time is stored and compared in **UTC**; every duration is a `time.Duration` (24 h days, 30-day months, 365-day years — the same `intervalDuration`/`paidOrderInterval` convention 1a already uses). No `time.Date` month arithmetic, no local-zone comparison, so no DST effect. Vietnamese display uses a fixed `+07:00` zone (`time.FixedZone("ICT", 7*3600)`, no tzdata dependency); decisions never use it.
@@ -190,9 +190,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 // seedBillingLicence builds a VN-billed subscription licence whose period
@@ -429,7 +429,7 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // BillingSubscription is one row of the billing engine's hourly scan: the
@@ -966,7 +966,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
 )
 
 // A 30-day period at 1,190,000 VND. Every case is exact integer maths,
@@ -1120,8 +1120,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/payment/provider/fake"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/payment/provider/fake"
 )
 
 // A renewal order is dated for the period it buys, not for the click, so
@@ -1263,7 +1263,7 @@ func seedSubscriptionLicence(t *testing.T, f *fixture, providerName string) *mod
 }
 ```
 
-Add `"github.com/tabloy/keygate/internal/model"` to the imports.
+Add `"github.com/dtg-corp/dsoft/internal/model"` to the imports.
 
 - [ ] **Step 6: Run them to fail**
 
@@ -1457,7 +1457,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 func TestMain(m *testing.M) { os.Exit(testdb.Main(m, "../../db/migrations")) }
@@ -1477,15 +1477,15 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/tabloy/keygate/internal/billing"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/payment/provider/fake"
-	"github.com/tabloy/keygate/internal/payment/providercfg"
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/billing"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/provider/fake"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/service"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 // harness is one engine wired to a real database, a real checkout service
@@ -1682,7 +1682,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // A licence inside the lead window gets one renewal order for the next
@@ -1875,7 +1875,7 @@ func storePlanPrice(providerName string) store.PlanPriceInput {
 }
 ```
 
-and `"github.com/tabloy/keygate/internal/store"`, `"context"` to `service_test.go`'s imports; drop the `_ = errors.Is` line and the `errors` import.
+and `"github.com/dtg-corp/dsoft/internal/store"`, `"context"` to `service_test.go`'s imports; drop the `_ = errors.Is` line and the `errors` import.
 
 - [ ] **Step 2: Run them to fail**
 
@@ -1900,11 +1900,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tabloy/keygate/internal/license"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/license"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/service"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // DefaultInterval is how often Run sweeps. Hourly, like the expiry loop:
@@ -2592,8 +2592,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/billing"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/billing"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // Every edge of the ladder. The tag is the rung only; the period suffix is
@@ -2725,7 +2725,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // The ladder, from furthest out to the end. The tag is `rung`; the
@@ -2893,7 +2893,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/service"
+	"github.com/dtg-corp/dsoft/internal/service"
 )
 
 // Pinning the sweep's now makes the ladder a sequence of exact instants:
@@ -3060,7 +3060,7 @@ func (h *harness) setProductSetting(t *testing.T, key, value string) {
 }
 ```
 
-with `"github.com/tabloy/keygate/internal/testsupport"` added to that file's imports.
+with `"github.com/dtg-corp/dsoft/internal/testsupport"` added to that file's imports.
 
 `h.licence` must use the harness's own email so the queued mail's recipient can be asserted; add to `TestReminderMailContent` a check by reading `email_queue`:
 
@@ -3146,9 +3146,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/service"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // reminderToggle is the existing settings switch that turns the whole
@@ -3386,8 +3386,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/service"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/service"
 )
 
 // The end of the paid period, unpaid: past due, with the subscription, and
@@ -3680,8 +3680,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // markPastDue moves the licence into past_due when the period it paid for
@@ -4243,8 +4243,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/billing"
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/billing"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // upgradeHarness is a monthly licence with 20 days left and a yearly plan
@@ -4475,10 +4475,10 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 var (
@@ -4856,7 +4856,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // The conversion order starts the paid period exactly when the trial ends,
@@ -5108,7 +5108,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // trialConversionSetting names the plan a product's trials convert to, per
@@ -5590,8 +5590,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/service"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/service"
 )
 
 // Two renewals in a row: the first is paid on time, the second is paid
@@ -5771,7 +5771,7 @@ Expected: PASS for `TestEndToEndPaymentOnTheBoundary`; the other two are the acc
 	go billingSvc.Run(ctx)
 ```
 
-with `"github.com/tabloy/keygate/internal/billing"` in the import block. `checkoutSvc` is created above this point (it is used by the payment handlers earlier in the same function), so no reordering is needed.
+with `"github.com/dtg-corp/dsoft/internal/billing"` in the import block. `checkoutSvc` is created above this point (it is used by the payment handlers earlier in the same function), so no reordering is needed.
 
 - [ ] **Step 4: Verify the whole plan**
 

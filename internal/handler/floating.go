@@ -7,8 +7,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/service"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 type FloatingHandler struct {

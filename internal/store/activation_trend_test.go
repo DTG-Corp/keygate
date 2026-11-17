@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // The trend's days are UTC days, like its from/to bounds, whatever time

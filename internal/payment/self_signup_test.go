@@ -19,7 +19,7 @@ func TestCheckoutByPlan_SelfSignupGoesToTheForm(t *testing.T) {
 	if err := s.UpdatePlan(ctx, plan); err != nil {
 		t.Fatal(err)
 	}
-	h := &StripeHandler{Store: s, BaseURL: "https://keygate.example"}
+	h := &StripeHandler{Store: s, BaseURL: "https://dsoft.example"}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/pay/"+plan.CheckoutID, nil)
@@ -28,7 +28,7 @@ func TestCheckoutByPlan_SelfSignupGoesToTheForm(t *testing.T) {
 	if w.Code != http.StatusFound {
 		t.Fatalf("status %d, want 302: %s", w.Code, w.Body.String())
 	}
-	if got, want := w.Header().Get("Location"), "https://keygate.example/signup/"+plan.CheckoutID; got != want {
+	if got, want := w.Header().Get("Location"), "https://dsoft.example/signup/"+plan.CheckoutID; got != want {
 		t.Fatalf("Location %q, want %q", got, want)
 	}
 }

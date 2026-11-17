@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/testsupport"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/testsupport"
 )
 
 // A Stripe session carries its created time in whole seconds, so a

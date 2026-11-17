@@ -1,9 +1,9 @@
 package billing_test
 
 import (
-	"github.com/tabloy/keygate/internal/billing"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/service"
+	"github.com/dtg-corp/dsoft/internal/billing"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/service"
 )
 
 // The wiring the Lead adds to cmd/server/main.go only compiles if the

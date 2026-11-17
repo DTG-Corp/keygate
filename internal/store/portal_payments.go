@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // The portal reads the payment ledger as one customer. A customer is the

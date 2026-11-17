@@ -5,9 +5,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 // CouponsPortalHandler answers the customer portal's "do I have a code?"

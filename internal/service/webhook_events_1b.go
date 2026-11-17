@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // WebhookDispatcher is the one method the phase-1b emitters use. The

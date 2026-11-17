@@ -8,9 +8,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/uptrace/bun"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 // seedPaidOrder grants a product + plan and a pending new order for it,

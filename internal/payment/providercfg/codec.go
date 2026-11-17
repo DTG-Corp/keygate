@@ -5,7 +5,7 @@ package providercfg
 import (
 	"fmt"
 
-	"github.com/tabloy/keygate/internal/crypto"
+	"github.com/dtg-corp/dsoft/internal/crypto"
 )
 
 const subkeyPurpose = "payment-config"

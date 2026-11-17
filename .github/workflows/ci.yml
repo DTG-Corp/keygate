@@ -24,9 +24,9 @@ jobs:
       postgres:
         image: postgres:18
         env:
-          POSTGRES_USER: keygate
-          POSTGRES_PASSWORD: keygate
-          POSTGRES_DB: keygate
+          POSTGRES_USER: dsoft
+          POSTGRES_PASSWORD: dsoft
+          POSTGRES_DB: dsoft
         ports:
           - 5432:5432
         options: >-
@@ -51,7 +51,7 @@ jobs:
       # every package shares this database.
       - name: Tests
         env:
-          TEST_DATABASE_URL: postgres://keygate:keygate@localhost:5432/keygate?sslmode=disable
+          TEST_DATABASE_URL: postgres://dsoft:dsoft@localhost:5432/dsoft?sslmode=disable
         run: go test -p 1 -count=1 ./...
 
       - name: Build

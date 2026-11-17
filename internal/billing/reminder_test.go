@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/billing"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/billing"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
 )
 
 // One mail per rung: the customer gets a week, then three days, then the
@@ -23,7 +23,7 @@ func TestReminderRungFireOnceEach(t *testing.T) {
 	if len(r.mail.notices) != 1 || r.mail.notices[0].Days != 7 {
 		t.Fatalf("day -7 notices = %+v", r.mail.notices)
 	}
-	if got := r.mail.notices[0].PayURL; got != "https://keygate.test/portal" {
+	if got := r.mail.notices[0].PayURL; got != "https://dsoft.test/portal" {
 		t.Fatalf("pay URL = %q", got)
 	}
 	if got := r.mail.notices[0].PeriodEnd; !got.Equal(end) {

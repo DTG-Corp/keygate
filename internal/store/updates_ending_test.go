@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // The reminder query must pick active perpetual licenses whose period

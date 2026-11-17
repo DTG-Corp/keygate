@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/branding"
+	"github.com/dtg-corp/dsoft/internal/branding"
 )
 
 // The attribution footer (AGPL v3 Section 7(b)) is present on every

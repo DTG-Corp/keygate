@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 // The report tests write in a week no other fixture uses, so a parallel

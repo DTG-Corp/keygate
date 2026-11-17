@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/billing"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/billing"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // ProrateMinor is the unused fraction of the period, floored, and it has

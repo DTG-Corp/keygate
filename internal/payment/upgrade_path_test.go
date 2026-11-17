@@ -13,8 +13,8 @@ import (
 
 	"github.com/uptrace/bun/driver/pgdriver"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // TestUpgradePath_LegacyDataAndReplays runs the schema an existing
@@ -36,7 +36,7 @@ func TestUpgradePath_LegacyDataAndReplays(t *testing.T) {
 	if err := admin.Ping(); err != nil {
 		t.Skipf("ping: %v", err)
 	}
-	dbName := "keygate_upg_" + time.Now().Format("150405")
+	dbName := "dsoft_upg_" + time.Now().Format("150405")
 	if _, err := admin.Exec("CREATE DATABASE " + dbName); err != nil {
 		t.Fatalf("create database: %v", err)
 	}

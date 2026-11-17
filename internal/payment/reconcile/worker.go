@@ -11,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/payment/providercfg"
-	"github.com/tabloy/keygate/internal/payment/providers/payos"
-	"github.com/tabloy/keygate/internal/payment/providers/sepay"
-	"github.com/tabloy/keygate/internal/payment/settlement"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/payos"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/sepay"
+	"github.com/dtg-corp/dsoft/internal/payment/settlement"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // DefaultInterval is how often a full pass runs. Spec §3.7 asks for five

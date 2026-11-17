@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/hooks"
-	"github.com/tabloy/keygate/internal/payment/settlement"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/hooks"
+	"github.com/dtg-corp/dsoft/internal/payment/settlement"
 )
 
 type recorder struct{ calls *[]string }

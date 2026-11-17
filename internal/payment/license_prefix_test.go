@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // A key bought through Stripe starts with the prefix of its product.

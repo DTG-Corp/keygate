@@ -200,7 +200,7 @@ package coupons
 import (
 	"testing"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // coupon builds an active, stackable coupon with the fields the engine
@@ -554,9 +554,9 @@ import (
 	"math"
 	"sort"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 const (
@@ -1173,7 +1173,7 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 var (
@@ -1867,10 +1867,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 // quoteFixture is a durable product+plan plus an open 10%-included VAT
@@ -2232,8 +2232,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // MetadataKey is the order metadata block checkout writes the applied

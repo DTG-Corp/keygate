@@ -30,27 +30,27 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
     -ldflags "-s -w \
-      -X github.com/tabloy/keygate/internal/version.Version=${VERSION} \
-      -X github.com/tabloy/keygate/internal/version.Commit=${COMMIT} \
-      -X github.com/tabloy/keygate/internal/version.BuildDate=${BUILD_DATE}" \
-    -o /keygate ./cmd/server
+      -X github.com/dtg-corp/dsoft/internal/version.Version=${VERSION} \
+      -X github.com/dtg-corp/dsoft/internal/version.Commit=${COMMIT} \
+      -X github.com/dtg-corp/dsoft/internal/version.BuildDate=${BUILD_DATE}" \
+    -o /dsoft ./cmd/server
 
 # ── Runtime ──
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata curl
 WORKDIR /app
-COPY --from=backend /keygate /usr/local/bin/keygate
+COPY --from=backend /dsoft /usr/local/bin/dsoft
 COPY --from=backend /app/db/migrations /app/db/migrations
 COPY --from=backend /app/web/dist /app/web/dist
 COPY --from=backend /app/docs /app/docs
 
-LABEL org.opencontainers.image.title="Keygate" \
+LABEL org.opencontainers.image.title="DSoft" \
       org.opencontainers.image.description="Open source license management platform" \
-      org.opencontainers.image.vendor="Tabloy" \
-      org.opencontainers.image.url="https://keygate.app" \
-      org.opencontainers.image.source="https://github.com/tabloy/keygate" \
+      org.opencontainers.image.vendor="DTG Corp" \
+      org.opencontainers.image.url="https://github.com/dtg-corp/dsoft" \
+      org.opencontainers.image.source="https://github.com/dtg-corp/dsoft" \
       org.opencontainers.image.licenses="AGPL-3.0"
 
 EXPOSE 9000
 ENV PORT=9000
-ENTRYPOINT ["keygate"]
+ENTRYPOINT ["dsoft"]

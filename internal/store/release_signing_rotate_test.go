@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // public_key must look like a base64 ed25519 key (length 32..128).

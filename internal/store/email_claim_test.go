@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/testsupport"
+	"github.com/dtg-corp/dsoft/internal/testsupport"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // Every replica runs an email processor. Two of them must never take

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // Sentinel errors for the release signing key store.

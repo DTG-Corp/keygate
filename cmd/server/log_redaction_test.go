@@ -13,7 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 // An updater that cannot set headers sends its credential as a query

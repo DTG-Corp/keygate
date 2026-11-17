@@ -1,4 +1,4 @@
-module github.com/tabloy/keygate
+module github.com/dtg-corp/dsoft
 
 go 1.27.0
 

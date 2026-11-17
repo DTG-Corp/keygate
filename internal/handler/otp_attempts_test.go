@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // Five wrong guesses use the code up: the right one is refused after.
