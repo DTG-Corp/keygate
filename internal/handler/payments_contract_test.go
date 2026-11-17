@@ -35,6 +35,8 @@ var paymentSourceFiles = []string{
 	"payments_admin.go",
 	"payment_providers_admin.go",
 	"plan_prices_admin.go",
+	"payments_coupons_admin.go",
+	"payments_coupons_portal.go",
 }
 
 // paymentCode pins one documented code to its one status.
@@ -52,6 +54,7 @@ var paymentVocabulary = map[string]paymentCode{
 	// Shared envelope codes these handlers use for a malformed body or
 	// an internal fault. Their global statuses are fixed everywhere.
 	"BAD_REQUEST":    {status: 400, emitted: true},
+	"UNAUTHORIZED":   {status: 401, emitted: true},
 	"NOT_FOUND":      {status: 404, emitted: true},
 	"INTERNAL_ERROR": {status: 500, emitted: true},
 
