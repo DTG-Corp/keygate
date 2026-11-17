@@ -1937,6 +1937,44 @@ export const portalPayments = {
     normalisePortalOrderDetail(await post<unknown>(`/portal/payments/orders/${encodeURIComponent(code)}/cancel`)),
 }
 
+// The portal's single-code check. It prices the signed-in buyer's code
+// against a plan and creates nothing. There is no order-creation form in
+// phase 1b, so no page calls it yet; keeping the typed client here means
+// a future checkout entry validates through the same envelope handling.
+export interface PortalCouponInput {
+  plan_id: string
+  code: string
+  quantity?: number
+}
+
+export interface PortalCouponValidation extends CouponQuote {
+  valid: boolean
+  plan: { id: string; name: string; slug?: string }
+  product: { id: string; name: string }
+  price_minor: number
+  currency: string
+  currency_exponent: number
+}
+
+export const portalCoupons = {
+  validate: async (input: PortalCouponInput): Promise<PortalCouponValidation> => {
+    const raw = await post<unknown>("/portal/coupons/validate", { ...input, quantity: input.quantity ?? 1 })
+    const rec = rawRecord(raw)
+    const quote = normaliseCouponQuote(raw)
+    const plan = rawRecord(rec.plan)
+    const product = rawRecord(rec.product)
+    return {
+      ...quote,
+      valid: rawBool(rec.valid, true),
+      plan: { id: rawString(plan.id), name: rawString(plan.name), slug: rawString(plan.slug) || undefined },
+      product: { id: rawString(product.id), name: rawString(product.name) },
+      price_minor: rawNumber(rec.price_minor) ?? 0,
+      currency: rawString(rec.currency) || quote.currency || "VND",
+      currency_exponent: rawNumber(rec.currency_exponent) ?? quote.currency_exponent ?? 0,
+    }
+  },
+}
+
 export const portalInvoices = {
   list: async (params?: { limit?: number; offset?: number }): Promise<Paged<{ invoices: PaymentInvoice[] }>> => {
     const raw = await get<unknown>(`/portal/invoices?${listQuery(params)}`)
