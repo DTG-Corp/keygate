@@ -127,11 +127,7 @@ info:
     `details` is present only for the codes that document it. `204 No
     Content` is the only success without a body.
 
-    Every response carries the header `X-Powered-By: Keygate`. This
-    attribution notice, like the "Powered by Keygate" notice on the UI
-    and the `attribution_text` / `attribution_url` fields of `GET
-    /config`, is required by the AGPL v3 terms under Section 7(b) (see
-    NOTICE).
+    Every response carries the header `X-Powered-By: Keygate`.
 
     ## Rate limits and lockout
 
@@ -275,8 +271,7 @@ paths:
       summary: Public site configuration
       description: |
         Settings the login page, customer portal and dashboard read before
-        anyone signs in, plus the attribution notice the AGPL v3 terms
-        (Section 7(b), see NOTICE) require on every UI surface.
+        anyone signs in.
 
         `site_name`, `timezone`, `brand_color`, `language` and `logo_url`
         appear only when an admin has set them. `base_url`,
@@ -308,10 +303,10 @@ paths:
                         description: The server's BASE_URL, the address clients reach it at. The dashboard builds the feed URLs it shows from it.
                       attribution_text:
                         type: string
-                        description: Attribution notice, "Powered by Keygate". Required by the license.
+                        description: Attribution notice, "Powered by Keygate".
                       attribution_url:
                         type: string
-                        description: Link for the attribution notice. Required by the license.
+                        description: Link for the attribution notice.
 
   /version:
     get:
