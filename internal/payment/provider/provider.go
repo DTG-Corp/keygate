@@ -18,6 +18,12 @@ type Buyer struct {
 	Phone   string `json:"phone,omitempty"`
 	TaxID   string `json:"tax_id,omitempty"`
 	Address string `json:"address,omitempty"`
+	// TaxCode is the tax code the buyer names for a VAT invoice (spec
+	// §6.2). It is required exactly when RequestInvoice is set and is
+	// stored with the order for the invoicing module.
+	TaxCode string `json:"tax_code,omitempty"`
+	// RequestInvoice asks for a VAT invoice for this purchase.
+	RequestInvoice bool `json:"request_invoice,omitempty"`
 }
 
 // BankAccount is the destination account a customer transfers to.
