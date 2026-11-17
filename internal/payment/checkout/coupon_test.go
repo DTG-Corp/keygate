@@ -308,6 +308,23 @@ func TestCheckoutTrialOrderSettlesAtCreation(t *testing.T) {
 	}
 }
 
+func TestCheckoutRefusesInvoiceWithoutTaxCode(t *testing.T) {
+	f := newCouponFixture(t, 1_000_000)
+	in := f.input(f.email("buyer-tax"), f.plan.ID)
+	in.Buyer.RequestInvoice = true
+	if _, err := f.svc.CreateOrder(f.ctx, in); !errors.Is(err, checkout.ErrTaxCodeRequired) {
+		t.Fatalf("err = %v", err)
+	}
+	var orders int
+	if err := f.s.DB.NewRaw("SELECT count(*) FROM payment_orders WHERE email = ?", strings.ToLower(f.email("buyer-tax"))).
+		Scan(f.ctx, &orders); err != nil {
+		t.Fatalf("count orders: %v", err)
+	}
+	if orders != 0 {
+		t.Fatalf("orders = %d, want none", orders)
+	}
+}
+
 func TestCheckoutRefusesCodesWithoutCouponService(t *testing.T) {
 	f := newCouponFixture(t, 1_000_000)
 	f.svc.Coupons = nil

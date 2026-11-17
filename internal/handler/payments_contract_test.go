@@ -96,17 +96,21 @@ var paymentVocabulary = map[string]paymentCode{
 	"PAYMENT_AMOUNT_MISMATCH":       {status: 422, emitted: false},
 	"PAYMENT_SIGNATURE_INVALID":     {status: 400, emitted: false},
 	"PAYMENT_CURRENCY_UNSUPPORTED":  {status: 422, emitted: false},
-	"PAYMENT_TAX_CODE_REQUIRED":     {status: 422, emitted: false},
-	"PAYMENT_COUPON_INVALID":        {status: 422, emitted: false},
-	"PAYMENT_COUPON_EXHAUSTED":      {status: 409, emitted: false},
-	"PAYMENT_COUPON_STACK_LIMIT":    {status: 422, emitted: false},
-	"PAYMENT_COUPON_GROUP_CONFLICT": {status: 422, emitted: false},
-	"PAYMENT_COUPON_NOT_STACKABLE":  {status: 422, emitted: false},
-	"PAYMENT_COUPON_TRIAL_MIXED":    {status: 422, emitted: false},
-	"PAYMENT_COUPON_ASSIGNED":       {status: 422, emitted: false},
-	"INVOICE_NOT_FOUND":             {status: 404, emitted: false},
-	"INVOICE_ALREADY_ISSUED":        {status: 409, emitted: false},
-	"EINVOICE_PROVIDER_ERROR":       {status: 502, emitted: false},
+	"PAYMENT_TAX_CODE_REQUIRED":     {status: 422, emitted: true},
+	"PAYMENT_COUPON_INVALID":        {status: 422, emitted: true},
+	"PAYMENT_COUPON_EXHAUSTED":      {status: 409, emitted: true},
+	"PAYMENT_COUPON_STACK_LIMIT":    {status: 422, emitted: true},
+	"PAYMENT_COUPON_GROUP_CONFLICT": {status: 422, emitted: true},
+	"PAYMENT_COUPON_NOT_STACKABLE":  {status: 422, emitted: true},
+	"PAYMENT_COUPON_TRIAL_MIXED":    {status: 422, emitted: true},
+	"PAYMENT_COUPON_ASSIGNED":       {status: 422, emitted: true},
+	// Admin coupon create answers a duplicate code with 409; the spec's
+	// proposed table has no entry for it, and reusing COUPON_INVALID
+	// would hide an operator-fixable conflict behind a buyer-facing code.
+	"PAYMENT_COUPON_CODE_TAKEN": {status: 409, emitted: true},
+	"INVOICE_NOT_FOUND":         {status: 404, emitted: false},
+	"INVOICE_ALREADY_ISSUED":    {status: 409, emitted: false},
+	"EINVOICE_PROVIDER_ERROR":   {status: 502, emitted: false},
 
 	// The webhook routes answer 401 with this code and a bare 400 for a
 	// body the adapter cannot decode. See TestPaymentWebhookAuthWritesCode.

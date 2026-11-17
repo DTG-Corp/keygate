@@ -11,6 +11,7 @@ import (
 
 	"github.com/tabloy/keygate/internal/model"
 	"github.com/tabloy/keygate/internal/payment/checkout"
+	"github.com/tabloy/keygate/internal/payment/coupons"
 	"github.com/tabloy/keygate/internal/payment/provider"
 	"github.com/tabloy/keygate/internal/store"
 	"github.com/tabloy/keygate/pkg/response"
@@ -32,6 +33,14 @@ type createOrderRequest struct {
 	Quantity int            `json:"quantity,omitempty"`
 	Buyer    provider.Buyer `json:"buyer,omitempty"`
 	Metadata map[string]any `json:"metadata,omitempty"`
+	// CouponCodes are validated and stacked per spec §3.9. A code that
+	// cannot apply fails the request unless IgnoreInvalidCoupons asks for
+	// a best-effort marketing flow.
+	CouponCodes          []string `json:"coupon_codes,omitempty"`
+	IgnoreInvalidCoupons bool     `json:"ignore_invalid_coupons,omitempty"`
+	// ExternalCustomerID is the caller's own customer id; the
+	// per-customer coupon limit counts against it when present.
+	ExternalCustomerID string `json:"external_customer_id,omitempty"`
 }
 
 func (h *PaymentsAPIHandler) Create(c *gin.Context) {
@@ -67,6 +76,8 @@ func (h *PaymentsAPIHandler) Create(c *gin.Context) {
 	res, err := h.Checkout.CreateOrder(c, checkout.CreateOrderInput{
 		PlanID: req.PlanID, Email: req.Email, Provider: req.Provider, Quantity: req.Quantity,
 		Buyer: req.Buyer, Metadata: req.Metadata, CreatedByKeyID: apiKeyID(c),
+		CouponCodes: req.CouponCodes, IgnoreInvalidCoupons: req.IgnoreInvalidCoupons,
+		ExternalCustomerID: req.ExternalCustomerID,
 	})
 	if err != nil {
 		writeCheckoutError(c, err)
@@ -87,6 +98,12 @@ func (h *PaymentsAPIHandler) Get(c *gin.Context) {
 		return
 	}
 	res.Attempt = attempt
+	discounts, err := h.Store.ListOrderDiscounts(c, order.ID)
+	if err != nil {
+		response.Internal(c, err)
+		return
+	}
+	res.Discounts = discounts
 	response.OK(c, orderView(res))
 }
 
@@ -212,8 +229,39 @@ func writeCheckoutError(c *gin.Context, err error) {
 		response.Err(c, http.StatusServiceUnavailable, "PAYMENT_PROVIDER_DISABLED", err.Error())
 	case errors.Is(err, store.ErrPriceNotConfigured), errors.Is(err, checkout.ErrPlanNotSellable):
 		response.Err(c, http.StatusUnprocessableEntity, "PAYMENT_PRICE_NOT_CONFIGURED", err.Error())
+	case errors.Is(err, checkout.ErrTaxCodeRequired):
+		response.Err(c, http.StatusUnprocessableEntity, "PAYMENT_TAX_CODE_REQUIRED",
+			"an invoice request needs a tax code of 10 to 13 digits")
+	case coupons.ErrorCode(err) != "":
+		writeCouponError(c, err)
 	default:
 		response.Internal(c, err)
+	}
+}
+
+// writeCouponError maps a rejected code to the documented code for its
+// reason (spec §6.5), so a client can tell "you typed a dead code" from
+// "you stacked two of the same family".
+func writeCouponError(c *gin.Context, err error) {
+	switch coupons.ErrorCode(err) {
+	case coupons.CodeExhausted:
+		response.Err(c, http.StatusConflict, "PAYMENT_COUPON_EXHAUSTED", err.Error())
+	case coupons.CodeStackLimit:
+		response.Err(c, http.StatusUnprocessableEntity, "PAYMENT_COUPON_STACK_LIMIT", err.Error())
+	case coupons.CodeGroupConflict:
+		response.Err(c, http.StatusUnprocessableEntity, "PAYMENT_COUPON_GROUP_CONFLICT", err.Error())
+	case coupons.CodeNotStackable:
+		response.Err(c, http.StatusUnprocessableEntity, "PAYMENT_COUPON_NOT_STACKABLE", err.Error())
+	case coupons.CodeTrialMixed:
+		response.Err(c, http.StatusUnprocessableEntity, "PAYMENT_COUPON_TRIAL_MIXED", err.Error())
+	case coupons.CodeAssigned:
+		response.Err(c, http.StatusUnprocessableEntity, "PAYMENT_COUPON_ASSIGNED", err.Error())
+	case coupons.CodeCodeTaken:
+		response.Err(c, http.StatusConflict, "PAYMENT_COUPON_CODE_TAKEN", err.Error())
+	default:
+		// CodeInvalid and anything the module adds later: the buyer's
+		// code cannot be used as submitted.
+		response.Err(c, http.StatusUnprocessableEntity, "PAYMENT_COUPON_INVALID", err.Error())
 	}
 }
 
@@ -244,8 +292,16 @@ func orderView(res *checkout.OrderResult) gin.H {
 		"email": res.Order.Email, "quantity": res.Order.Quantity,
 		"subtotal_minor": res.Order.SubtotalMinor, "discount_minor": res.Order.DiscountMinor,
 		"tax_minor": res.Order.TaxMinor, "total_minor": res.Order.TotalMinor,
+		// The aliases spec §6.2 shows are the same numbers; a client that
+		// reads only one set must not see two answers.
+		"subtotal": res.Order.SubtotalMinor, "discount": res.Order.DiscountMinor,
+		"tax": res.Order.TaxMinor, "total": res.Order.TotalMinor,
+		"amount":   res.Order.TotalMinor,
 		"currency": res.Order.Currency, "currency_exponent": res.Order.CurrencyExp,
 		"expires_at": res.Order.ExpiresAt,
+	}
+	if discounts := orderDiscountViews(res); len(discounts) > 0 {
+		out["discounts"] = discounts
 	}
 	if res.Order.LicenseID != "" {
 		out["license_id"] = res.Order.LicenseID
@@ -266,6 +322,31 @@ func orderView(res *checkout.OrderResult) gin.H {
 		out["payment"] = payment
 	}
 	return out
+}
+
+// orderDiscountViews is the response view of an order's coupon breakdown.
+// The amount coupons come from the order's snapshot rows; a trial has no
+// row there (payment_order_discounts only admits money coupons), so it is
+// rebuilt from the metadata block checkout wrote.
+func orderDiscountViews(res *checkout.OrderResult) []gin.H {
+	rows := make([]gin.H, 0, len(res.Discounts)+1)
+	for _, d := range res.Discounts {
+		row := gin.H{"code": d.CouponCode, "type": d.Type, "amount": d.AmountMinor}
+		if d.CouponID != "" {
+			row["coupon_id"] = d.CouponID
+		}
+		if d.Value != 0 {
+			row["value"] = d.Value
+		}
+		rows = append(rows, row)
+	}
+	if trial := coupons.FromOrderMetadata(res.Order).Trial; trial != nil {
+		rows = append(rows, gin.H{
+			"code": trial.Code, "type": "trial", "trial_days": trial.TrialDays,
+			"amount": res.Order.DiscountMinor, "coupon_id": trial.CouponID,
+		})
+	}
+	return rows
 }
 
 // orderRowView is the compact list row: no buyer blob, metadata or the

@@ -131,9 +131,14 @@ type CreateOrderInput struct {
 // OrderResult is the order and the instruction the buyer pays with. A
 // retried create whose previous instruction is still payable returns the
 // original pair rather than minting a second QR.
+//
+// Discounts is the coupon snapshot the order was priced with, in
+// application order. It is carried here so a response can show the
+// breakdown without a second read.
 type OrderResult struct {
-	Order   *model.PaymentOrder
-	Attempt *model.PaymentAttempt
+	Order     *model.PaymentOrder
+	Attempt   *model.PaymentAttempt
+	Discounts []*model.PaymentOrderDiscount
 }
 
 func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderResult, error) {
@@ -144,6 +149,13 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 	if email == "" || !strings.Contains(email, "@") {
 		return nil, fmt.Errorf("%w: a buyer email is required for the licence", ErrPlanNotSellable)
 	}
+	// An invoice request without a usable tax code fails here, before an
+	// order exists: an invoice that cannot be issued is not a late
+	// problem, it is this request's problem.
+	if err := validateBuyer(in.Buyer); err != nil {
+		return nil, err
+	}
+	in.Buyer.TaxCode = normaliseTaxCode(in.Buyer.TaxCode)
 	plan, err := s.Store.FindPlanByID(ctx, in.PlanID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: plan not found", ErrPlanNotSellable)
@@ -176,7 +188,7 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 			return nil, err
 		}
 		if paid != nil {
-			return &OrderResult{Order: paid}, nil
+			return &OrderResult{Order: paid, Discounts: discountRows(quote)}, nil
 		}
 	}
 
@@ -197,7 +209,7 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 	}
 	created := false
 	if order != nil && latest != nil && (payableAttempt(latest, time.Now()) || latest.Status == domain.AttemptSucceeded) {
-		return &OrderResult{Order: order, Attempt: latest}, nil
+		return &OrderResult{Order: order, Attempt: latest, Discounts: discountRows(quote)}, nil
 	}
 	if order == nil {
 		order, err = s.createOrder(ctx, plan, product, price, email, providerName, in)
@@ -215,7 +227,7 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 		if created {
 			s.Webhooks.Dispatch(ctx, product.ID, model.EventOrderCreated, map[string]any{"order": order})
 		}
-		return s.settleZeroTotal(ctx, order, providerName)
+		return s.settleZeroTotal(ctx, order, providerName, quote)
 	}
 
 	// The attempt never outlives its order: a reused order is up to a
@@ -270,7 +282,7 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 	if created {
 		s.Webhooks.Dispatch(ctx, product.ID, model.EventOrderCreated, map[string]any{"order": order})
 	}
-	return &OrderResult{Order: order, Attempt: attempt}, nil
+	return &OrderResult{Order: order, Attempt: attempt, Discounts: discountRows(quote)}, nil
 }
 
 // createOrder prices one quantity of a plan and writes the order.

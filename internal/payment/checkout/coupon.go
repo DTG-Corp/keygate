@@ -189,7 +189,7 @@ func (s *Service) paidZeroOrder(ctx context.Context, plan *model.Plan, email, pr
 // synthetic and deterministic (one per order code), so settlement's own
 // idempotency covers a retry as well; the order is then re-read so the
 // caller sees the paid row, licence link and all.
-func (s *Service) settleZeroTotal(ctx context.Context, order *model.PaymentOrder, providerName string) (*OrderResult, error) {
+func (s *Service) settleZeroTotal(ctx context.Context, order *model.PaymentOrder, providerName string, q *coupons.Quote) (*OrderResult, error) {
 	if s.Settler == nil {
 		return nil, fmt.Errorf("%w: zero-total order %s cannot be settled", ErrCouponSupportMissing, order.Code)
 	}
@@ -206,7 +206,28 @@ func (s *Service) settleZeroTotal(ctx context.Context, order *model.PaymentOrder
 	if err != nil {
 		return nil, err
 	}
-	return &OrderResult{Order: paid}, nil
+	return &OrderResult{Order: paid, Discounts: discountRows(q)}, nil
+}
+
+// discountRows maps a quote onto response rows for the amount coupons.
+// A trial is not a money coupon and has no row in
+// payment_order_discounts; the response rebuilds it from order metadata,
+// so one rule covers a fresh quote and a stored order alike.
+func discountRows(q *coupons.Quote) []*model.PaymentOrderDiscount {
+	if q == nil || len(q.Discounts) == 0 {
+		return nil
+	}
+	rows := make([]*model.PaymentOrderDiscount, 0, len(q.Discounts))
+	for _, d := range q.Discounts {
+		if d.Type == "trial" {
+			continue
+		}
+		rows = append(rows, &model.PaymentOrderDiscount{
+			CouponID: d.CouponID, CouponCode: d.Code, Type: d.Type,
+			Value: d.Value, AmountMinor: d.AmountMinor, Priority: d.Priority,
+		})
+	}
+	return rows
 }
 
 // zeroTotalNeedsSettlement reports whether an order was made free by a
