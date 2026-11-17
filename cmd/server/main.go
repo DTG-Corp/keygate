@@ -34,6 +34,8 @@ import (
 	"github.com/tabloy/keygate/internal/model"
 	"github.com/tabloy/keygate/internal/payment"
 	"github.com/tabloy/keygate/internal/payment/checkout"
+	"github.com/tabloy/keygate/internal/payment/hooks"
+	"github.com/tabloy/keygate/internal/payment/invoice"
 	"github.com/tabloy/keygate/internal/payment/provider"
 	"github.com/tabloy/keygate/internal/payment/providercfg"
 	"github.com/tabloy/keygate/internal/payment/providers/payos"
@@ -460,6 +462,11 @@ func main() {
 		providerSvc = providercfg.NewService(db, paymentCodec, cfg.PaymentMode)
 	}
 	settleSvc := &settlement.Service{Store: db, Webhooks: webhookSvc, Log: logger}
+	// Phase 1b: every paid order gets an invoice. The service is itself a
+	// settlement.PaidHook; coupon redemption is appended to the same chain
+	// (hooks.Chain) once Module B lands, because settlement has one field.
+	invoiceSvc := invoice.New(db, releaseStorage, logger)
+	settleSvc.PaidHook = hooks.Chain{invoiceSvc}
 	paymentsWebhookH := &handler.PaymentsWebhookHandler{
 		Store: db, Config: providerSvc, Settlement: settleSvc, Log: logger,
 	}
@@ -523,6 +530,10 @@ func main() {
 		},
 		PublicBaseURL: cfg.BaseURL,
 	}
+	paymentsInvoicesH := &handler.InvoicesAdminHandler{Invoices: invoiceSvc}
+	paymentsReportsH := &handler.ReportsAdminHandler{Store: db}
+	consumerInvoiceH := &handler.ConsumerInvoiceHandler{Invoices: invoiceSvc, Store: db}
+
 	expiryChecker := service.NewExpiryChecker(db, emailSvc, webhookSvc, logger)
 	if cfg.StripeSecretKey != "" {
 		expiryChecker.EndPastDueUpgrade = stripeH.EndPastDueUpgrade
@@ -1057,6 +1068,7 @@ func main() {
 		payWrite.POST("/orders/:code/cancel", paymentsAPIH.Cancel)
 		payRead.GET("/orders/:code", paymentsAPIH.Get)
 		payRead.GET("/orders", paymentsAPIH.List)
+		handler.RegisterConsumerInvoiceRoutes(payRead, consumerInvoiceH)
 	}
 
 	// Self sign-up for free plans (/pay sends those plans to the form).
@@ -1337,6 +1349,8 @@ func main() {
 		// queue's raw payloads. Manual settlement, refunds and matches
 		// are money-moving audit events, not routine merchant calls.
 		admin.GET("/payments/orders", paymentsAdminH.ListOrders)
+		handler.RegisterInvoicesAdminRoutes(admin, paymentsInvoicesH)
+		handler.RegisterReportsAdminRoutes(admin, paymentsReportsH)
 		admin.GET("/payments/orders/:code", paymentsAdminH.GetOrder)
 		admin.POST("/payments/orders/:code/mark-paid", paymentsAdminH.MarkPaid)
 		admin.POST("/payments/orders/:code/cancel", paymentsAdminH.CancelOrder)
