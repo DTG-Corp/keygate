@@ -61,14 +61,14 @@ type InvoiceFilter struct {
 // number, the id and the timestamps.
 type CreateInvoiceInput struct {
 	OrderID, LicenseID, EInvoiceProvider string
-	Buyer                                 []byte
-	Items                                 []model.InvoiceItem
-	SubtotalMinor, DiscountMinor          int64
-	TaxMinor, TotalMinor                  int64
-	Currency                              string
-	CurrencyExponent                      int16
-	Status                                string
-	IssuedAt                              *time.Time
+	Buyer                                []byte
+	Items                                []model.InvoiceItem
+	SubtotalMinor, DiscountMinor         int64
+	TaxMinor, TotalMinor                 int64
+	Currency                             string
+	CurrencyExponent                     int16
+	Status                               string
+	IssuedAt                             *time.Time
 	// NumberYear is the calendar year of the invoice number. The service
 	// passes the Asia/Ho_Chi_Minh year; zero means "this year in that
 	// zone", which only direct callers and tests rely on.
