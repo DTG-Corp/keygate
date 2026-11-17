@@ -376,20 +376,22 @@ function ReconciliationTable({ report }: { report: ReconciliationReport }) {
               </span>
             </div>
           ))}
-          <Badge variant={report.drift_minor === 0 ? "secondary" : "destructive"} className="gap-1">
-            {report.drift_minor !== 0 && <AlertTriangle className="h-3 w-3" />}
-            {report.drift_minor === 0
-              ? t("reports.healthy")
-              : t("reports.drift_alert", {
-                  amount: report.totals[0]
-                    ? formatMoney(
-                        report.drift_minor,
-                        report.totals[0].currency,
-                        currencyExponent(report.totals[0].currency),
-                      )
-                    : String(report.drift_minor),
-                })}
-          </Badge>
+          {/* Drift is only meaningful per currency: the handler's scalar
+              total mixes VND and USD minor units. */}
+          {report.totals.map((total) => (
+            <Badge
+              key={`drift-${total.currency}`}
+              variant={total.drift_minor === 0 ? "secondary" : "destructive"}
+              className="gap-1"
+            >
+              {total.drift_minor !== 0 && <AlertTriangle className="h-3 w-3" />}
+              {total.drift_minor === 0
+                ? t("reports.healthy")
+                : t("reports.drift_alert", {
+                    amount: formatMoney(total.drift_minor, total.currency, currencyExponent(total.currency)),
+                  })}
+            </Badge>
+          ))}
         </div>
       </CardHeader>
       <CardContent>

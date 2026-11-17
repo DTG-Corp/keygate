@@ -40,11 +40,12 @@ export default function PaymentRedemptionsPage() {
   const filter = {
     coupon: couponQuery || undefined,
     email: emailQuery || undefined,
-    // Bare dates: the handler reads them as whole days in Vietnam time.
-    // Sending a browser-local ISO instant would shift the window for an
-    // operator outside Vietnam.
-    from: from || undefined,
-    to: to || undefined,
+    // This handler parses a bare date as UTC midnight, unlike the invoice
+    // and report handlers, which read it as a Vietnam day. Send explicit
+    // VN boundaries so the filter means the same day on every screen; the
+    // server's upper bound is exclusive.
+    from: from ? new Date(`${from}T00:00:00+07:00`).toISOString() : undefined,
+    to: to ? new Date(new Date(`${to}T00:00:00+07:00`).getTime() + 86_400_000).toISOString() : undefined,
   }
 
   const { data, isLoading, error } = useQuery({
