@@ -1659,6 +1659,18 @@ func (s *Store) Audit(ctx context.Context, log *model.AuditLog) {
 	}()
 }
 
+// notBillingRailSQL keeps the Stripe-era lifecycle sweeps away from
+// licences billed by the Vietnamese rails. Phase 1b's billing engine owns
+// their renewals, dunning and suspension; a second sweep acting on the
+// same licence would double-mail and could expire instead of suspend.
+// Legacy licences with no subscription row stay in scope, which is why
+// this is NOT EXISTS rather than a join.
+const notBillingRailSQL = `NOT EXISTS (
+	SELECT 1 FROM subscriptions bs
+	WHERE bs.license_id = license.id
+	  AND bs.payment_provider IN ('sepay', 'payos')
+)`
+
 // FindLicensesForGraceExpiry returns active/past_due licenses that have passed valid_until.
 func (s *Store) FindLicensesForGraceExpiry(ctx context.Context) ([]*model.License, error) {
 	var out []*model.License
@@ -1667,6 +1679,7 @@ func (s *Store) FindLicensesForGraceExpiry(ctx context.Context) ([]*model.Licens
 		Where("license.status IN ('active', 'past_due')").
 		Where("license.valid_until IS NOT NULL").
 		Where("license.valid_until < ?", time.Now()).
+		Where(notBillingRailSQL).
 		Scan(ctx)
 	return out, err
 }
@@ -1706,6 +1719,7 @@ func (s *Store) FindStalePastDueLicenses(ctx context.Context, before time.Time) 
 		Relation("Product").
 		Where("license.status = 'past_due'").
 		Where("COALESCE(license.past_due_at, license.updated_at) < ?", before).
+		Where(notBillingRailSQL).
 		Scan(ctx)
 	return out, err
 }
@@ -1759,6 +1773,7 @@ func (s *Store) FindLicensesForExpiryReminder(ctx context.Context, from, to time
 		Where("license.valid_until IS NOT NULL").
 		Where("license.valid_until >= ?", from).
 		Where("license.valid_until <= ?", to).
+		Where(notBillingRailSQL).
 		OrderExpr("license.valid_until ASC").
 		Scan(ctx)
 	return out, err

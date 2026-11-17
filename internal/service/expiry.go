@@ -375,9 +375,16 @@ func (c *ExpiryChecker) SendPaymentFailureReminders(ctx context.Context) {
 		return
 	}
 	var licenses []*model.License
+	// A licence on the Vietnamese rails is on phase 1b's own ladder: its
+	// mail comes from the billing engine with different wording and
+	// timing, so this Stripe-era dunning loop stays away from it. Legacy
+	// licences with no subscription row keep their dunning.
 	err := c.store.DB.NewSelect().Model(&licenses).
 		Relation("Product").
 		Where("license.status = 'past_due' AND license.past_due_at IS NOT NULL").
+		Where(`NOT EXISTS (SELECT 1 FROM subscriptions bs
+			WHERE bs.license_id = license.id
+			  AND bs.payment_provider IN ('sepay', 'payos'))`).
 		Scan(ctx)
 	if err != nil || len(licenses) == 0 {
 		return
