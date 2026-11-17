@@ -258,13 +258,17 @@ Known limitations recorded at merge:
 
 ### Staging deployment record (2026-11-17)
 
-- Image `keygate:phase1b-r1` built from commit `f1eadfa`; staging
-  `/home/dtg/keygate/docker-compose.yml` now points at it (rollback tag:
-  `keygate:dtg-branding-r3`). Pre-deploy dump:
-  `backups/keygate-stg-pre-phase1b-20261117-114130.dump`.
+- Final image `keygate:phase1b-r3`, built from `50a6b62` (the phase-1b
+  branch merged with `origin/main` `e24659e`) with
+  `VERSION=sepay-payos-1b+dtg-branding`; staging
+  `/home/dtg/keygate/docker-compose.yml` points at it. Rollback tags:
+  `keygate:dtg-branding-r3` (phase 1a) plus `keygate:phase1b-r1` /
+  `keygate:phase1b-r2`. Pre-deploy dumps:
+  `backups/keygate-stg-pre-phase1b-20261117-114130.dump` and
+  `backups/keygate-stg-pre-phase1b-r2-20261117-*`.
 - Schema migrations 53 → 58 (billing constraints, invoice/e-invoice,
-  coupon/redemption, portal, upgrade credit); health `ok`, version
-  reports `dev` because the image is built without version ldflags.
+  coupon/redemption, portal, upgrade credit); health `ok` and
+  `/health` reports `sepay-payos-1b+dtg-branding`.
 - Acceptance over `https://stg-license.dtgsoft.vn` (test admin and
   consumer keys inserted as `api_keys` rows, then deleted):
   coupon `ACPT2114738` (10%) quoted 99,000 → 89,100 VND with 8,100 VAT;
@@ -282,6 +286,35 @@ Known limitations recorded at merge:
   `payos` row for the settlement step and restored to `live` immediately
   afterwards; secrets were never printed and the temporary API keys were
   removed after the run.
-- Production deploy is intentionally not done yet: it needs the
-  operator's go-ahead and a fresh `pg_dump` (phase 1a rollback image and
-  dump stay available).
+### Production deployment record (2026-11-17)
+
+- Preflight: 53 migrations, 4 sellable PayOS plans (`starter-month`
+  99,000; `pro-month` 499,000; `starter-year` 950,400; `pro-year`
+  4,790,400 VND), one live `payos` provider config, **0 subscriptions on
+  the sepay/payos rail and 0 payment orders**, 2 active licences — so the
+  new billing engine had nothing to renew or suspend on first start.
+- Backup before deploy: `backups/keygate-prod-pre-phase1b-20261117-143418.dump`
+  (170 KB, `pg_restore --list` 356 TOC entries, sha256
+  `dd3f7f4518ae4b6b852efdefa71b0dc4424b9ec277e66865994211f7dd2fdebb`);
+  compose backed up as `docker-compose.yml.bak-phase1b-20261117-143418`.
+- Image `keygate:phase1b-prod-1`, built from `50a6b62` on the staging
+  host (x86_64, same arch), streamed with `docker save | docker load`;
+  `/home/tunguyen/keygate/docker-compose.yml` now points at it. Rollback
+  tag: `keygate:sepay-payos-dtg-1a-prod` (phase 1a).
+- Deploy: migrations 53 → 58 applied on start (including
+  `20261117_05_upgrade_credit.up.sql`), health `ok`, version
+  `sepay-payos-1b+dtg-branding`, container healthy.
+- Production smoke (read-only, over `https://license.dtgsoft.vn`, using
+  a temporary admin `api_keys` row that was deleted afterwards):
+  `attribution_text: "Powered by Keygate"`, `X-Powered-By: Keygate`,
+  SPA phase-1b pages return 200, admin/portal phase-1b APIs return 401
+  unauthenticated, public quote for `starter-month` returns 99,000 VND
+  with 9,000 VAT, admin invoices/coupons/orders lists empty, revenue CSV
+  renders; PayOS webhook route rejects the smoke payload with 401 and
+  the unconfigured SePay route returns 503 — both expected.
+- No paid end-to-end run was performed on production (live money); the
+  full purchase → invoice → PDF → void → coupon-redemption flow was
+  exercised on staging. Before issuing real VAT invoices the operator
+  should set `invoice_seller_name`, `invoice_seller_tax_code`,
+  `invoice_seller_address` and `invoice_seller_email` (empty today, so
+  the PDF falls back to the branding name).
