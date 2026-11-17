@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-- Module path is `github.com/tabloy/keygate`; Go 1.27; Gin 1.12; Bun + PostgreSQL.
+- Module path is `github.com/dtg-corp/dsoft`; Go 1.27; Gin 1.12; Bun + PostgreSQL.
 - Every ID is a TEXT UUID string (`store.NewID()`); never BIGSERIAL. Every FK is TEXT.
 - All API responses use `pkg/response` envelope `{"success":true,"data":…}` / `{"success":false,"error":{code,message,details}}`; JSON is snake_case.
 - Money = integer minor units + `currency` + `currency_exponent` (VND 0, USD 2). Never floats.
@@ -129,7 +129,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 func TestPaymentSchemaTablesExist(t *testing.T) {
@@ -493,7 +493,7 @@ package domain_test
 
 import "testing"
 
-import "github.com/tabloy/keygate/internal/payment/domain"
+import "github.com/dtg-corp/dsoft/internal/payment/domain"
 
 func TestComputeTotalsTaxInclusive(t *testing.T) {
 	// 1.190.000 ₫ inclusive of 10% VAT.
@@ -603,7 +603,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
 )
 
 // Crockford Base32 excludes I, L, O and U so a code read aloud or typed
@@ -702,9 +702,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/payment/provider/fake"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/provider/fake"
 )
 
 func TestFakeProviderRoundTrip(t *testing.T) {
@@ -781,7 +781,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
 )
 
 type Buyer struct {
@@ -874,7 +874,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/tabloy/keygate/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
 )
 
 // Provider is a scripted adapter for tests. Zero value works: every
@@ -970,9 +970,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 func seedPlan(t *testing.T, s *store.Store) *model.Plan {
@@ -1083,8 +1083,8 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
 )
 
 var (
@@ -1264,8 +1264,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 type PlanPriceAdminHandler struct {
@@ -1385,8 +1385,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 // PublicPlansHandler serves GET /api/v1/products/:product_slug/plans.
@@ -1484,7 +1484,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
 )
 
 func TestCodecRoundTripBindsAAD(t *testing.T) {
@@ -1536,7 +1536,7 @@ package providercfg
 import (
 	"fmt"
 
-	"github.com/tabloy/keygate/internal/crypto"
+	"github.com/dtg-corp/dsoft/internal/crypto"
 )
 
 const subkeyPurpose = "payment-config"
@@ -1584,7 +1584,7 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 var ErrProviderConfigNotFound = errors.New("payment provider config not found")
@@ -1692,11 +1692,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/payment/providercfg"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 func TestResolveProductOverrideWins(t *testing.T) {
@@ -1782,8 +1782,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 var (
@@ -2022,8 +2022,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
 	"github.com/gin-gonic/gin"
 )
 
@@ -2105,8 +2105,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/payment/providercfg"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 type PaymentProviderAdminHandler struct {
@@ -2264,9 +2264,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 func seedProductPlan(t *testing.T, s *store.Store) (productID, planID string) {
@@ -2396,8 +2396,8 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
 )
 
 var (
@@ -2687,7 +2687,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/payment/providers/sepay"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/sepay"
 )
 
 func TestBuildQRImageURL(t *testing.T) {
@@ -2728,8 +2728,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/providers/sepay"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/sepay"
 )
 
 const sepayBody = `{"id":92704,"gateway":"MB Bank","transactionDate":"2026-11-12 15:04:05","accountNumber":"0978482700","subAccount":"","code":"KG7F3K2Q","content":"KG7F3K2Q chuyen tien","transferType":"in","description":"NGUYEN VAN A chuyen tien","transferAmount":1190000,"accumulated":105000000,"referenceCode":"FT24012345678"}`
@@ -2935,8 +2935,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
 )
 
 var ErrWebhookUnauthorized = errors.New("sepay: webhook signature invalid")
@@ -3082,7 +3082,7 @@ package sepay_test
 import (
 	"testing"
 
-	"github.com/tabloy/keygate/internal/payment/providers/sepay"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/sepay"
 )
 
 func TestGatewayCanonicalDropsEmptyAndZero(t *testing.T) {
@@ -3226,7 +3226,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
 )
 
 // Config is one resolved provider config row.
@@ -3338,7 +3338,7 @@ package payos_test
 import (
 	"testing"
 
-	"github.com/tabloy/keygate/internal/payment/providers/payos"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/payos"
 )
 
 func TestSignCreateRequestPinned(t *testing.T) {
@@ -3491,8 +3491,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
 )
 
 var ErrWebhookUnauthorized = errors.New("payos: webhook signature invalid")
@@ -3568,8 +3568,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/providers/payos"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/payos"
 )
 
 func TestParseWebhookPaid(t *testing.T) {
@@ -3825,7 +3825,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
 )
 
 type Config struct {
@@ -3935,7 +3935,7 @@ package model_test
 import (
 	"testing"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 func TestPaymentWebhookEventsRegistered(t *testing.T) {
@@ -3977,7 +3977,7 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 type PaymentEventInput struct {
@@ -4034,7 +4034,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
 )
 
 func newSePayWebhookFixture(t *testing.T) (*apiFixture, *PaymentsWebhookHandler, string) {
@@ -4136,12 +4136,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/providercfg"
-	"github.com/tabloy/keygate/internal/payment/providers/payos"
-	"github.com/tabloy/keygate/internal/payment/providers/sepay"
-	"github.com/tabloy/keygate/internal/payment/settlement"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/payos"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/sepay"
+	"github.com/dtg-corp/dsoft/internal/payment/settlement"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 type PaymentsWebhookHandler struct {
@@ -4394,12 +4394,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/payment/settlement"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/settlement"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 func seedSellable(t *testing.T, s *store.Store) (productID, planID string) {
@@ -4473,9 +4473,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // buildNewLicense assembles the licence row for a paid new-order. It
@@ -4543,11 +4543,11 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/service"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 type Service struct {
@@ -4950,7 +4950,7 @@ package model_test
 import (
 	"testing"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 func TestPaymentScopesRegistered(t *testing.T) {
@@ -4982,13 +4982,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/payment/providercfg"
-	"github.com/tabloy/keygate/internal/payment/provider/fake"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/payment/provider/fake"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 func TestCreateOrderResolvesPriceAndTotals(t *testing.T) {
@@ -5066,12 +5066,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/payment/providercfg"
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/service"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 var (
@@ -5272,11 +5272,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 type PaymentsAPIHandler struct {
@@ -5656,10 +5656,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/reconcile"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/reconcile"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 func seedTwoPendingOrders(t *testing.T, s *store.Store) (*model.PaymentOrder, *model.PaymentOrder) {
@@ -5730,9 +5730,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 type Matcher struct{ Store *store.Store }
@@ -5804,10 +5804,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/payment/settlement"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/settlement"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 type Worker struct {

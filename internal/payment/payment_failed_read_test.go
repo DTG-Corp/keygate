@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // invoice.payment_failed reads the subscription from Stripe for every

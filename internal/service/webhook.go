@@ -23,9 +23,9 @@ import (
 	"golang.org/x/net/http/httpproxy"
 	"golang.org/x/net/idna"
 
-	"github.com/tabloy/keygate/internal/middleware"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/middleware"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 type WebhookService struct {

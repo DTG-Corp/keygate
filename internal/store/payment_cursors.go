@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // DefaultSyncScope is the cursor scope a provider that has no

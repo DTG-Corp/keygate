@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // The consumer payments API is scoped separately for reads and writes so

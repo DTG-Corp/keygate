@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/testsupport"
+	"github.com/dtg-corp/dsoft/internal/testsupport"
 )
 
 func newTemplateTestService() *EmailService {

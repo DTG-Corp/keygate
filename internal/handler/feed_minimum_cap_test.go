@@ -3,8 +3,8 @@ package handler
 import (
 	"testing"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/service"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/service"
 )
 
 // A cutoff-scoped feed must not tell the client to refuse versions it

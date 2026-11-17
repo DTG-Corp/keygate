@@ -8,11 +8,11 @@
 
 可自托管的 Keygen、Cryptlex、LicenseSpring 替代方案。
 
-[官网](https://keygate.app) · [文档](https://keygate.app/docs) · [社区](https://github.com/tabloy/keygate/discussions)
+[官网](https://keygate.app) · [文档](https://keygate.app/docs) · [社区](https://github.com/dtg-corp/dsoft/discussions)
 
 [![License](https://img.shields.io/badge/license-AGPL%20v3-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/tabloy/keygate?label=release&color=green)](https://github.com/tabloy/keygate/releases)
-[![Stars](https://img.shields.io/github/stars/tabloy/keygate?style=flat)](https://github.com/tabloy/keygate/stargazers)
+[![Release](https://img.shields.io/github/v/release/tabloy/keygate?label=release&color=green)](https://github.com/dtg-corp/dsoft/releases)
+[![Stars](https://img.shields.io/github/stars/tabloy/keygate?style=flat)](https://github.com/dtg-corp/dsoft/stargazers)
 [![Sponsor](https://img.shields.io/badge/sponsor-❤-ff69b4)](https://ko-fi.com/alanisme)
 
 **[English](README.md)** · **[简体中文](README.zh-CN.md)**
@@ -112,7 +112,7 @@ docker compose up -d
 ### 从源码构建
 
 ```bash
-git clone https://github.com/tabloy/keygate.git
+git clone https://github.com/dtg-corp/dsoft.git
 cd keygate && cp .env.example .env
 make build && ./bin/keygate
 ```
@@ -145,8 +145,8 @@ make build && ./bin/keygate
 
 ## 社区
 
-- **[讨论区](https://github.com/tabloy/keygate/discussions)** — 提问、分享想法
-- **[Issues](https://github.com/tabloy/keygate/issues)** — Bug 报告和功能请求
+- **[讨论区](https://github.com/dtg-corp/dsoft/discussions)** — 提问、分享想法
+- **[Issues](https://github.com/dtg-corp/dsoft/issues)** — Bug 报告和功能请求
 - **[博客](https://keygate.app/blog)** — 产品更新和技术文章
 - **[赞助](https://keygate.app/sponsorships)** — 支持项目发展
 
@@ -160,7 +160,7 @@ _虚位以待。_
 
 ## 贡献
 
-欢迎所有形式的贡献 — Bug 修复、新功能、文档改进、翻译等。查看 [open issues](https://github.com/tabloy/keygate/issues) 或发起 [讨论](https://github.com/tabloy/keygate/discussions)，然后提交 PR。
+欢迎所有形式的贡献 — Bug 修复、新功能、文档改进、翻译等。查看 [open issues](https://github.com/dtg-corp/dsoft/issues) 或发起 [讨论](https://github.com/dtg-corp/dsoft/discussions)，然后提交 PR。
 
 ## 商业授权
 

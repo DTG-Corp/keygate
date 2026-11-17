@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
 )
 
 // gatewayFieldOrder is the canonical order SePay's hosted-checkout

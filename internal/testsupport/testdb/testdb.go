@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // Store opens the integration database or skips the test when

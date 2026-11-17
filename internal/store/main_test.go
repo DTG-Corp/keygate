@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 // In the external test package: testdb imports store.

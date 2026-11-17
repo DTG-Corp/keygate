@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // TestIdempotencyClaim_Atomic verifies that under concurrent claims of

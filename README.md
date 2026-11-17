@@ -8,11 +8,11 @@
 
 The self-hosted alternative to Keygen, Cryptlex, and LicenseSpring.
 
-[Website](https://keygate.app) · [Documentation](https://keygate.app/docs) · [Community](https://github.com/tabloy/keygate/discussions)
+[Website](https://keygate.app) · [Documentation](https://keygate.app/docs) · [Community](https://github.com/dtg-corp/dsoft/discussions)
 
 [![License](https://img.shields.io/badge/license-AGPL%20v3-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/tabloy/keygate?label=release&color=green)](https://github.com/tabloy/keygate/releases)
-[![Stars](https://img.shields.io/github/stars/tabloy/keygate?style=flat)](https://github.com/tabloy/keygate/stargazers)
+[![Release](https://img.shields.io/github/v/release/tabloy/keygate?label=release&color=green)](https://github.com/dtg-corp/dsoft/releases)
+[![Stars](https://img.shields.io/github/stars/tabloy/keygate?style=flat)](https://github.com/dtg-corp/dsoft/stargazers)
 [![Sponsor](https://img.shields.io/badge/sponsor-❤-ff69b4)](https://ko-fi.com/alanisme)
 
 **[English](README.md)** · **[简体中文](README.zh-CN.md)**
@@ -116,7 +116,7 @@ docker compose up -d
 ### From source
 
 ```bash
-git clone https://github.com/tabloy/keygate.git
+git clone https://github.com/dtg-corp/dsoft.git
 cd keygate && cp .env.example .env
 make build && ./bin/keygate
 ```
@@ -149,8 +149,8 @@ Open **http://localhost:9000** — the setup wizard guides you from there.
 
 ## Community
 
-- **[Discussions](https://github.com/tabloy/keygate/discussions)** — Questions, ideas, show & tell
-- **[Issues](https://github.com/tabloy/keygate/issues)** — Bug reports and feature requests
+- **[Discussions](https://github.com/dtg-corp/dsoft/discussions)** — Questions, ideas, show & tell
+- **[Issues](https://github.com/dtg-corp/dsoft/issues)** — Bug reports and feature requests
 - **[Blog](https://keygate.app/blog)** — Updates and engineering stories
 - **[Sponsor](https://keygate.app/sponsorships)** — Support the project
 
@@ -165,7 +165,7 @@ _Be the first._
 
 ## Contributing
 
-All contributions welcome — bugs, features, docs, translations. Check [open issues](https://github.com/tabloy/keygate/issues) or start a [discussion](https://github.com/tabloy/keygate/discussions), then submit a PR.
+All contributions welcome — bugs, features, docs, translations. Check [open issues](https://github.com/dtg-corp/dsoft/issues) or start a [discussion](https://github.com/dtg-corp/dsoft/discussions), then submit a PR.
 
 ## Commercial License
 

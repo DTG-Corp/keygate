@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
 )
 
 // maxLinkExpiry is PayOS's ceiling for expiredAt, a signed 32-bit epoch

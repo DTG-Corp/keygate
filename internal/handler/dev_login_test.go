@@ -8,7 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/config"
+	"github.com/dtg-corp/dsoft/internal/config"
 )
 
 // Dev-login is for the machine running a development server. A server

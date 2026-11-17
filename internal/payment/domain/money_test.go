@@ -3,7 +3,7 @@ package domain_test
 import (
 	"testing"
 
-	"github.com/tabloy/keygate/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
 )
 
 func TestComputeTotalsTaxInclusive(t *testing.T) {

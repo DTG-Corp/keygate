@@ -12,7 +12,7 @@ import (
 	"github.com/uptrace/bun"
 	"golang.org/x/mod/semver"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // Release-related sentinel errors.

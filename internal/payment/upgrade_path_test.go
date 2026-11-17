@@ -13,8 +13,8 @@ import (
 
 	"github.com/uptrace/bun/driver/pgdriver"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // TestUpgradePath_LegacyDataAndReplays runs the schema an existing

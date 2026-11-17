@@ -10,8 +10,8 @@ import (
 
 	"github.com/stripe/stripe-go/v82"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // Plans sold per seat (issue #41). The buyer pays Stripe for a quantity

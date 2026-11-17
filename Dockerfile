@@ -30,9 +30,9 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
     -ldflags "-s -w \
-      -X github.com/tabloy/keygate/internal/version.Version=${VERSION} \
-      -X github.com/tabloy/keygate/internal/version.Commit=${COMMIT} \
-      -X github.com/tabloy/keygate/internal/version.BuildDate=${BUILD_DATE}" \
+      -X github.com/dtg-corp/dsoft/internal/version.Version=${VERSION} \
+      -X github.com/dtg-corp/dsoft/internal/version.Commit=${COMMIT} \
+      -X github.com/dtg-corp/dsoft/internal/version.BuildDate=${BUILD_DATE}" \
     -o /keygate ./cmd/server
 
 # ── Runtime ──
@@ -48,7 +48,7 @@ LABEL org.opencontainers.image.title="Keygate" \
       org.opencontainers.image.description="Open source license management platform" \
       org.opencontainers.image.vendor="Tabloy" \
       org.opencontainers.image.url="https://keygate.app" \
-      org.opencontainers.image.source="https://github.com/tabloy/keygate" \
+      org.opencontainers.image.source="https://github.com/dtg-corp/dsoft" \
       org.opencontainers.image.licenses="AGPL-3.0"
 
 EXPOSE 9000

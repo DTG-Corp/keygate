@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // TestDemoteOwner_RaceTwoOwners exercises the exact bug the

@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/config"
+	"github.com/dtg-corp/dsoft/internal/config"
 )
 
 // The Secure attribute has to follow the connection the browser

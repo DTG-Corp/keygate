@@ -12,10 +12,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/mod/semver"
 
-	"github.com/tabloy/keygate/internal/branding"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/version"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/branding"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/version"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 type SystemHandler struct {
@@ -42,8 +42,8 @@ type updateInfo struct {
 func NewSystemHandler(s *store.Store) *SystemHandler {
 	return &SystemHandler{
 		Store:     s,
-		RepoOwner: "tabloy",
-		RepoName:  "keygate",
+		RepoOwner: "dtg-corp",
+		RepoName:  "dsoft",
 	}
 }
 
@@ -52,8 +52,8 @@ func (h *SystemHandler) GetVersion(c *gin.Context) {
 		"version":     version.Version,
 		"commit":      version.Commit,
 		"build_date":  version.BuildDate,
-		"project":     branding.Project,
-		"project_url": branding.URL,
+		"project":     branding.Product,
+		"project_url": branding.ProductURL,
 	})
 }
 
@@ -123,7 +123,7 @@ func (h *SystemHandler) fetchLatestRelease() *updateInfo {
 		return info
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	req.Header.Set("User-Agent", "Keygate/"+version.Version)
+	req.Header.Set("User-Agent", "DSoft/"+version.Version)
 
 	resp, err := client.Do(req)
 	if err != nil {

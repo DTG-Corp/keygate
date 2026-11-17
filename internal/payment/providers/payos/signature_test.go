@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/payment/providers/payos"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/payos"
 )
 
 // PayOS publishes the canonical form, not a Go helper, so these tests

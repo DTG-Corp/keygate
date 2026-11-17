@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // The admin detail page reads an order and everything the rails did
