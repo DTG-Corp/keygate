@@ -20,7 +20,7 @@ export default function LoginPage() {
   const justSetUp = params.get("setup") === "done"
   const [needsSetup, setNeedsSetup] = useState(false)
   const [devLogin, setDevLogin] = useState(false)
-  const [devEmail, setDevEmail] = useState("admin@keygate.dev")
+  const [devEmail, setDevEmail] = useState("admin@dsoft.dev")
   const [devName, setDevName] = useState("Admin")
   const [devLoading, setDevLoading] = useState(false)
   const [devError, setDevError] = useState("")

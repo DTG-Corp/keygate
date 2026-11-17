@@ -20,11 +20,15 @@ interface I18nContextType {
 
 const I18nContext = createContext<I18nContextType | null>(null)
 
-const STORAGE_KEY = "keygate_locale"
+// The locale choice lives under the new key; the pre-rebrand key is read
+// once so an existing choice survives the rename, and dropped as soon as
+// the new key takes over.
+const STORAGE_KEY = "dsoft_locale"
+const LEGACY_STORAGE_KEY = "keygate_locale"
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY) as Locale
+    const saved = (localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY)) as Locale
     if (saved && locales[saved]) return saved
     const browserLang = navigator.language.toLowerCase()
     if (browserLang.startsWith("zh")) return "zh"
@@ -35,6 +39,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const setLocale = useCallback((l: Locale) => {
     setLocaleState(l)
     localStorage.setItem(STORAGE_KEY, l)
+    localStorage.removeItem(LEGACY_STORAGE_KEY)
     document.documentElement.lang = l
   }, [])
 

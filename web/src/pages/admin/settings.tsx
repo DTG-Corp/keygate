@@ -296,7 +296,7 @@ export default function SettingsPage() {
                   <Input
                     value={form.site_name || ""}
                     onChange={(e) => set("site_name", e.target.value)}
-                    placeholder="Keygate"
+                    placeholder="DSoft"
                   />
                   <p className="text-xs text-muted-foreground">{t("settings.siteNameDesc")}</p>
                 </div>
