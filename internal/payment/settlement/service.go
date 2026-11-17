@@ -27,12 +27,38 @@ import (
 // duplicate" can do so without matching a string.
 var ErrOrderAlreadySettled = errors.New("payment order is already settled")
 
+// PaidHook runs after a successful settlement has granted or extended a
+// licence and emitted the phase-1a events. Phase 1b hangs invoice
+// creation and coupon redemption off it. Implementations must be
+// idempotent and must never make the provider ack fail: a webhook
+// redelivery does not call the hook twice (the order is already paid by
+// then), but a crash retry can.
+type PaidHook interface {
+	AfterPaid(ctx context.Context, order *model.PaymentOrder, lic *model.License, providerName string)
+}
+
 // Service turns verified provider events into licences. It is the only
 // writer that grants one.
 type Service struct {
 	Store    *store.Store
 	Webhooks *service.WebhookService
 	Log      *slog.Logger
+	// PaidHook is optional; nil means no post-settlement work.
+	PaidHook PaidHook
+}
+
+// afterPaid runs the phase-1b hook without letting its failure (or a
+// panic) turn a settled payment into a provider retry storm.
+func (s *Service) afterPaid(ctx context.Context, order *model.PaymentOrder, lic *model.License, providerName string) {
+	if s.PaidHook == nil || order == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger().Error("settlement: paid hook panicked", "order", order.Code, "panic", r)
+		}
+	}()
+	s.PaidHook.AfterPaid(context.WithoutCancel(ctx), order, lic, providerName)
 }
 
 func (s *Service) logger() *slog.Logger {
@@ -189,6 +215,7 @@ func (s *Service) settleNew(ctx context.Context, order *model.PaymentOrder, prov
 		return nil
 	}
 	s.dispatchPaid(ctx, paid, granted, providerName, ev)
+	s.afterPaid(ctx, paid, granted, providerName)
 	return nil
 }
 
@@ -239,6 +266,7 @@ func (s *Service) settleRenewal(ctx context.Context, order *model.PaymentOrder, 
 		return nil
 	}
 	s.dispatchPaid(ctx, paid, granted, providerName, ev)
+	s.afterPaid(ctx, paid, granted, providerName)
 	return nil
 }
 

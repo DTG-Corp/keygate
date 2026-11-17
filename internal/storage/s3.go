@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -217,6 +218,28 @@ func (s *S3Storage) Get(ctx context.Context, key string) (io.ReadCloser, error) 
 		return nil, fmt.Errorf("storage: get: %w", err)
 	}
 	return out.Body, nil
+}
+
+// Put uploads body to key with the given content type. S3 PutObject is
+// an overwrite, so retries are safe; callers own the key layout.
+func (s *S3Storage) Put(ctx context.Context, key string, body []byte, contentType string) error {
+	if key == "" {
+		return errors.New("storage: empty key")
+	}
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(s.bucket),
+		Key:           aws.String(key),
+		Body:          bytes.NewReader(body),
+		ContentType:   aws.String(contentType),
+		ContentLength: aws.Int64(int64(len(body))),
+	})
+	if err != nil {
+		return fmt.Errorf("storage: put: %w", err)
+	}
+	return nil
 }
 
 // Delete removes an object. S3 DeleteObject is idempotent on AWS (calling

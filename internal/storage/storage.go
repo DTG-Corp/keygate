@@ -51,6 +51,12 @@ type Storage interface {
 	// copy large objects in parts. Returns ErrObjectNotFound if src does
 	// not exist.
 	Copy(ctx context.Context, src, dst string, size int64) error
+
+	// Put uploads body to key from the server. It overwrites an existing
+	// object (idempotent, matching S3 PutObject). Used for small
+	// server-generated artifacts such as invoice PDFs; client uploads
+	// keep using PresignedPut so the bytes never touch this server.
+	Put(ctx context.Context, key string, body []byte, contentType string) error
 }
 
 // ObjectInfo is the subset of object metadata the release service consumes.
@@ -95,5 +101,9 @@ func (Disabled) Delete(_ context.Context, _ string) error {
 var _ Storage = Disabled{}
 
 func (Disabled) Copy(_ context.Context, _, _ string, _ int64) error {
+	return ErrStorageDisabled
+}
+
+func (Disabled) Put(_ context.Context, _ string, _ []byte, _ string) error {
 	return ErrStorageDisabled
 }
