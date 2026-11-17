@@ -1470,6 +1470,7 @@ const en = {
   "coupons.delete_desc":
     "A coupon without redemptions is deleted. A redeemed coupon is archived so its history stays intact.",
   "coupons.code_required": "A code is required.",
+  "coupons.code_invalid": "Codes are 1–64 characters using letters, digits, '.', '_' or '-'.",
   "coupons.value_required": "Enter a value.",
   "coupons.trial_required": "Enter at least one trial day.",
   "coupons.currency_required": "A fixed coupon needs a currency.",

@@ -314,6 +314,7 @@ const vi = {
   "coupons.delete_title": "Xoá mã giảm giá này?",
   "coupons.delete_desc": "Mã chưa dùng sẽ bị xoá. Mã đã dùng sẽ được lưu trữ để giữ lịch sử.",
   "coupons.code_required": "Cần nhập mã.",
+  "coupons.code_invalid": "Mã gồm 1–64 ký tự chữ, số, '.', '_' hoặc '-'.",
   "coupons.value_required": "Hãy nhập giá trị.",
   "coupons.trial_required": "Cần ít nhất một ngày dùng thử.",
   "coupons.currency_required": "Mã giảm số tiền cần có tiền tệ.",

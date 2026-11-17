@@ -696,10 +696,16 @@ export default function PaymentCouponEditorPage() {
 
 function validate(input: CouponInput, t: ReturnType<typeof useI18n>["t"]): string {
   if (!input.code) return t("coupons.code_required")
+  // The store accepts letters (including non-Latin), digits, dot, dash
+  // and underscore, 1–64 characters. Checking here turns the server's
+  // PAYMENT_COUPON_INVALID into an inline message before the round trip.
+  if (input.code.length > 64 || !/^[\p{L}\p{N}._-]+$/u.test(input.code)) return t("coupons.code_invalid")
   if (input.type === "percent" && (input.value < 1 || input.value > 10000)) return t("coupons.percent_range")
   if (input.type === "fixed" && input.value <= 0) return t("coupons.value_required")
   if (input.type === "fixed" && !input.currency) return t("coupons.currency_required")
-  if (input.type === "trial" && input.trial_days <= 0) return t("coupons.trial_required")
+  if (input.type === "trial" && (input.trial_days < 1 || input.trial_days > 3650)) {
+    return t("coupons.trial_required")
+  }
   if (input.valid_from && input.valid_to && new Date(input.valid_to) <= new Date(input.valid_from)) {
     return t("coupons.valid_range")
   }
