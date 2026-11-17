@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/billing"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/billing"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
 )
 
 // Two replicas wake on the same hour and scan the same due subscription.

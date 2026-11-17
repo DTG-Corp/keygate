@@ -11,7 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // Idempotency wraps a handler so retries with the same `Idempotency-Key`

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/pkg/apperr"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/pkg/apperr"
 )
 
 // max_seats is how many people a license holds, the owner included:
@@ -36,7 +36,7 @@ func TestSeatLimitCountsTheOwner(t *testing.T) {
 	if err := s.CreateProduct(ctx, prod); err != nil {
 		t.Fatal(err)
 	}
-	svc := NewSeatService(s, NewWebhookService(s, slog.Default(), time.Second, 1, true), nil, slog.Default(), "https://keygate.example")
+	svc := NewSeatService(s, NewWebhookService(s, slog.Default(), time.Second, 1, true), nil, slog.Default(), "https://dsoft.example")
 
 	licence := func(name string, maxSeats int) *model.License {
 		t.Helper()

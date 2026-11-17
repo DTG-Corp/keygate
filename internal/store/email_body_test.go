@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // claimOwn takes the claim on this test's own mail.

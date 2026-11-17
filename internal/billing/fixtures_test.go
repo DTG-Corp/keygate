@@ -12,15 +12,15 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/tabloy/keygate/internal/billing"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/payment/provider/fake"
-	"github.com/tabloy/keygate/internal/payment/providercfg"
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/billing"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/provider/fake"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/service"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 // rig is one billing service wired to the real store and the real
@@ -67,7 +67,7 @@ func (r *rig) useRealCheckout() {
 	}
 	webhooks := service.NewWebhookService(r.s, discardLogger(), time.Second, 0, true)
 	svc := &checkout.Service{
-		Store: r.s, BaseURL: "https://keygate.test", Webhooks: webhooks,
+		Store: r.s, BaseURL: "https://dsoft.test", Webhooks: webhooks,
 		Providers: func(ctx context.Context, productID, name string) (provider.Provider, *providercfg.ResolvedConfig, error) {
 			if name != r.prod.Name() {
 				return nil, nil, checkout.ErrProviderUnavailable
@@ -91,7 +91,7 @@ func (r *rig) rebuild() {
 	}
 	r.svc = billing.New(billing.Deps{
 		Store: r.s, Checkout: r.checkout, Email: r.mail, Webhook: r.webhook,
-		Logger: discardLogger(), BaseURL: "https://keygate.test",
+		Logger: discardLogger(), BaseURL: "https://dsoft.test",
 		Now: func() time.Time { return r.now },
 	})
 }

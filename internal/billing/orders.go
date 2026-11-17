@@ -3,7 +3,7 @@ package billing
 import (
 	"context"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // keyPrefixLength is how much of a licence key an event may carry: enough

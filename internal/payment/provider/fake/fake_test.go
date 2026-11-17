@@ -5,9 +5,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/payment/provider/fake"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/provider/fake"
 )
 
 func TestFakeProviderRoundTrip(t *testing.T) {

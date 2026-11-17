@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/crypto"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/crypto"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // acceptedMember invites who onto the licence and accepts the invite.

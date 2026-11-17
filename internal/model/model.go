@@ -372,7 +372,7 @@ type Entitlement struct {
 	// StripeMeterEventName: the Stripe Billing Meter event_name to
 	// emit on each RecordUsage call. Configured per-meter in the
 	// merchant's Stripe dashboard. Empty disables metered sync for
-	// the feature (Keygate-internal quota only).
+	// the feature (DSoft-internal quota only).
 	StripeMeterEventName string `bun:",notnull,default:''" json:"stripe_meter_event_name,omitempty"`
 }
 
@@ -463,7 +463,7 @@ type License struct {
 	OrgName   string     `json:"org_name,omitempty"`
 
 	// External identifiers — opaque strings owned by the merchant.
-	// Used to map Keygate licenses to the merchant's own user/tenant
+	// Used to map DSoft licenses to the merchant's own user/tenant
 	// model without a separate mapping table on their side.
 	ExternalCustomerID  string `bun:",notnull,default:''" json:"external_customer_id,omitempty"`
 	ExternalWorkspaceID string `bun:",notnull,default:''" json:"external_workspace_id,omitempty"`
@@ -835,7 +835,7 @@ type LicenseAddon struct {
 // ─── Plan Update Terms ───
 //
 // One row per period a plan has sold, with the instant it took
-// effect. A checkout Keygate created carries the period it was sold
+// effect. A checkout DSoft created carries the period it was sold
 // at; a Stripe Payment Link the merchant made carries nothing, and
 // this is what tells fulfilment which period the buyer was shown.
 type PlanUpdateTerms struct {
@@ -1024,7 +1024,7 @@ func UpdatesUntilFor(licenseType string, days int, now time.Time) *time.Time {
 	return &until
 }
 
-// IsFree reports whether Keygate charges nothing for the plan: no
+// IsFree reports whether DSoft charges nothing for the plan: no
 // purchase price, no update period and no renewals. It is the rule the
 // plans_self_signup_free constraint holds a self sign-up plan to, and
 // the one an upgrade checks the licence's current plan against.
@@ -1091,7 +1091,7 @@ func RenewedUpdatesUntil(current *time.Time, now time.Time, days int) time.Time 
 // total) — Stripe's Billing Meter API accumulates server-side per
 // customer + event_name.
 //
-// Identifier is the stable token Keygate hands to Stripe as the
+// Identifier is the stable token DSoft hands to Stripe as the
 // meter event's `identifier` field; Stripe dedupes retries over a
 // rolling 24-hour window using it, so our sync job can call as
 // many times as it wants without double-counting.
@@ -1148,12 +1148,12 @@ const (
 
 	// Payment events (phase 1b, spec §3.10/§8): the rest of the order
 	// lifecycle, refunds, invoices and the renewal reminder.
-	EventOrderExpired        = "order.expired"
-	EventOrderCanceled       = "order.canceled"
-	EventPaymentRefunded     = "payment.refunded"
-	EventInvoiceIssued       = "invoice.issued"
-	EventInvoiceVoided       = "invoice.voided"
-	EventLicenseRenewalDue   = "license.renewal_due"
+	EventOrderExpired      = "order.expired"
+	EventOrderCanceled     = "order.canceled"
+	EventPaymentRefunded   = "payment.refunded"
+	EventInvoiceIssued     = "invoice.issued"
+	EventInvoiceVoided     = "invoice.voided"
+	EventLicenseRenewalDue = "license.renewal_due"
 )
 
 // WebhookEvents is every event a webhook can subscribe to. Delivery

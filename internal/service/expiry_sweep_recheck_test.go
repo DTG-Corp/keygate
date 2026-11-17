@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // The sweeps re-check in the write: a licence extended (grace) or paid

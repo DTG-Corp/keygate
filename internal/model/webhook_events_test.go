@@ -3,7 +3,7 @@ package model_test
 import (
 	"testing"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // The phase-1a payment rails emit exactly these four events (spec §11).

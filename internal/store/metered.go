@@ -5,7 +5,7 @@ import (
 	"database/sql/driver"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // meteredSyncLockKey names the advisory lock one metered sync pass

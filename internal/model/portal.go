@@ -8,7 +8,7 @@ import (
 )
 
 // CustomerBillingProfile is the buyer/tax block a customer saves in the
-// portal and Keygate reuses at checkout (spec §3.8, §6.4). One row per
+// portal and DSoft reuses at checkout (spec §3.8, §6.4). One row per
 // user; an empty buyer object means "nothing saved".
 type CustomerBillingProfile struct {
 	bun.BaseModel `bun:"table:customer_billing_profiles"`

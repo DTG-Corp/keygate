@@ -9,9 +9,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/service"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // seedPricedPlan creates a product and a plan of the given shape, with
@@ -71,7 +71,7 @@ func webhookFixture(t *testing.T, s *store.Store, productID string, events ...st
 	t.Helper()
 	ctx := context.Background()
 	wh := &model.Webhook{
-		ProductID: productID, URL: "http://127.0.0.1:1/keygate-hook",
+		ProductID: productID, URL: "http://127.0.0.1:1/dsoft-hook",
 		Secret: "test-secret", Events: events, Active: true,
 	}
 	if err := s.CreateWebhook(ctx, wh); err != nil {

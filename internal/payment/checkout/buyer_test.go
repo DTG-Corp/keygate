@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
 )
 
 // The tax code rule is Vietnamese: 10 digits for a company, 13 for a

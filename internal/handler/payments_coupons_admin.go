@@ -12,10 +12,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/uptrace/bun"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 // CouponsAdminHandler owns the coupon catalogue: definitions, their
@@ -444,7 +444,7 @@ func (h *CouponsAdminHandler) couponView(c *gin.Context, cp *model.Coupon, scope
 }
 
 // scopeViews renders a coupon's scope rows with the names behind the ids,
-// so an operator reads "Keygate Pro" rather than a UUID.
+// so an operator reads "DSoft Pro" rather than a UUID.
 func (h *CouponsAdminHandler) scopeViews(c *gin.Context, scopes []*model.CouponScope) []gin.H {
 	rows := make([]gin.H, 0, len(scopes))
 	if len(scopes) == 0 {

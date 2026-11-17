@@ -11,8 +11,8 @@ import (
 
 	"github.com/stripe/stripe-go/v82"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // metaFor is meta for an upgrade to plan.

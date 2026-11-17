@@ -15,13 +15,13 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/providercfg"
-	"github.com/tabloy/keygate/internal/payment/providers/payos"
-	"github.com/tabloy/keygate/internal/payment/providers/sepay"
-	"github.com/tabloy/keygate/internal/payment/reconcile"
-	"github.com/tabloy/keygate/internal/payment/settlement"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/payos"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/sepay"
+	"github.com/dtg-corp/dsoft/internal/payment/reconcile"
+	"github.com/dtg-corp/dsoft/internal/payment/settlement"
 )
 
 // workerFixture is a matcher fixture plus the settlement service and the

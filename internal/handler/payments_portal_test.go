@@ -12,10 +12,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // ─── portal fixture ───
@@ -282,7 +282,7 @@ func TestPortalOrderDetailOwnershipAndPayment(t *testing.T) {
 		ID: store.NewID(), OrderID: order.ID, Provider: "sepay", ProviderRef: "ref-" + order.Code,
 		Status: domain.AttemptPending, AmountMinor: order.TotalMinor, Currency: order.Currency,
 		QRPayload: "qr-" + order.Code, CheckoutURL: "https://pay.example.com/" + order.Code,
-		Raw: json.RawMessage(`{"bank":{"bank_name":"MB","account_no":"0978482700"},"description":"` + order.Code + `"}`),
+		Raw:       json.RawMessage(`{"bank":{"bank_name":"MB","account_no":"0978482700"},"description":"` + order.Code + `"}`),
 		ExpiresAt: ptrTime(time.Now().Add(time.Hour)),
 	}
 	if err := f.s.CreatePaymentAttempt(f.ctx, attempt); err != nil {
@@ -442,8 +442,8 @@ func (f *portalFixture) invoice(t *testing.T, id, buyerEmail, orderID string) *m
 	t.Helper()
 	inv := &model.Invoice{
 		ID: id, Number: "KG-2026-0000" + id[len(id)-1:], OrderID: orderID,
-		Buyer:     json.RawMessage(`{"name":"Buyer","email":"` + buyerEmail + `"}`),
-		Items:     []model.InvoiceItem{{Description: "Pro", Quantity: 1, UnitAmountMinor: 1_190_000, AmountMinor: 1_190_000}},
+		Buyer:         json.RawMessage(`{"name":"Buyer","email":"` + buyerEmail + `"}`),
+		Items:         []model.InvoiceItem{{Description: "Pro", Quantity: 1, UnitAmountMinor: 1_190_000, AmountMinor: 1_190_000}},
 		SubtotalMinor: 1_190_000, TotalMinor: 1_190_000, Currency: "VND", CurrencyExp: 0,
 		Status: model.InvoiceStatusIssued, CreatedAt: time.Now(),
 	}

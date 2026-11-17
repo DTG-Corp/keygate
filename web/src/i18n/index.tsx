@@ -20,11 +20,11 @@ interface I18nContextType {
 
 const I18nContext = createContext<I18nContextType | null>(null)
 
-const STORAGE_KEY = "keygate_locale"
+const STORAGE_KEY = "dsoft_locale"
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY) as Locale
+    const saved = localStorage.getItem(STORAGE_KEY) as Locale | null
     if (saved && locales[saved]) return saved
     const browserLang = navigator.language.toLowerCase()
     if (browserLang.startsWith("zh")) return "zh"

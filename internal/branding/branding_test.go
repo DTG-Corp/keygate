@@ -3,7 +3,7 @@ package branding_test
 import (
 	"testing"
 
-	"github.com/tabloy/keygate/internal/branding"
+	"github.com/dtg-corp/dsoft/internal/branding"
 )
 
 func TestBrandingValues(t *testing.T) {

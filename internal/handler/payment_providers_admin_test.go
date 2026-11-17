@@ -9,7 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
 )
 
 func TestProviderAdminNeverReturnsSecrets(t *testing.T) {

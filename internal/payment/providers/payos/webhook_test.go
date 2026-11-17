@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/providers/payos"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/payos"
 )
 
 const checksumKey = "checksum-key"

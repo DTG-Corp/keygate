@@ -6,7 +6,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/tabloy/keygate/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
 )
 
 // Provider is a scripted adapter for tests. Construct it with New: the

@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tabloy/keygate/internal/branding"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/branding"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // emailFooter returns the attribution footer appended to all outgoing emails.
@@ -352,7 +352,7 @@ func (s *EmailService) implicitTLS() bool {
 
 func (s *EmailService) sendSMTP(cfg resolvedConfig, addr, to string, msg []byte) error {
 	// The SMTP envelope sender (MAIL FROM, RFC 5321) must be a BARE
-	// address — "noreply@x.com", never "Keygate <noreply@x.com>".
+	// address — "noreply@x.com", never "DSoft <noreply@x.com>".
 	// The display-name form is only legal in the RFC 5322 "From:"
 	// header (which Send() builds separately). Strict MTAs like
 	// Postmark reject a display-name envelope with
@@ -626,11 +626,11 @@ func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
 // put in SMTP_FROM:
 //
 //	"noreply@example.com"               → noreply@example.com
-//	"Keygate <noreply@example.com>"     → noreply@example.com
-//	"\"Keygate Billing\" <a@b.com>"     → a@b.com
+//	"DSoft <noreply@example.com>"     → noreply@example.com
+//	"\"DSoft Billing\" <a@b.com>"     → a@b.com
 //
 // The display-name form is kept verbatim in the message's "From:"
-// header (built in Send) so recipients still see "Keygate"; only the
+// header (built in Send) so recipients still see "DSoft"; only the
 // envelope is stripped to the bare address.
 func parseEnvelopeAddress(from string) (string, error) {
 	from = strings.TrimSpace(from)
@@ -894,7 +894,7 @@ func (s *EmailService) RenderDunningFinal(productName string) (subject, body str
 }
 
 // RenderAdminInvite builds the admin invite. The login link comes from
-// BASE_URL, like every other link Keygate mails: the request that made
+// BASE_URL, like every other link DSoft mails: the request that made
 // the invite says nothing reliable about the public address, and behind
 // a proxy it read as http://127.0.0.1:9000.
 func (s *EmailService) RenderAdminInvite(siteName, inviterName, role string) (subject, body string) {
@@ -906,7 +906,7 @@ func (s *EmailService) RenderAdminInvite(siteName, inviterName, role string) (su
 	})
 }
 
-// SendAdminInvite notifies a Keygate platform operator that they
+// SendAdminInvite notifies a DSoft platform operator that they
 // were added (or promoted) to the admin team. The "invite" is
 // really a role grant — the recipient can log in via email-OTP
 // immediately and the email's job is just to tell them that
@@ -949,14 +949,14 @@ func (s *EmailService) SendWelcome(to, name string) {
 	if s.skipDisabled("welcome", to) {
 		return
 	}
-	// Self-hosted installs set site_name; stock Keygate keeps the
-	// project name so an empty setting still greets as Keygate.
+	// Self-hosted installs set site_name; stock DSoft keeps the
+	// project name so an empty setting still greets as DSoft.
 	data := s.templateData(map[string]any{"Name": name})
 	site, _ := data["SiteName"].(string)
 	site = strings.TrimSpace(site)
 	data["SiteName"] = site
 	if site == "" {
-		site = branding.Project
+		site = branding.Product
 		data["SiteName"] = site
 	}
 	body := s.renderEmail("welcome", tmplWelcome, data)

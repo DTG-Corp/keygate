@@ -266,7 +266,7 @@ func (f *fakeSubscription) pay() {
 	}
 }
 
-// set changes the subscription behind Keygate's back, as an edit in the
+// set changes the subscription behind DSoft's back, as an edit in the
 // Stripe dashboard does.
 func (f *fakeSubscription) set(price string, quantity int64) {
 	f.mu.Lock()

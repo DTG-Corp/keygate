@@ -18,9 +18,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/uptrace/bun"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/service"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // seatFixture is a hybrid product with a plan sold per seat (team), a
@@ -1513,6 +1513,8 @@ func TestSeats_IdempotencyErrorIsARefusal(t *testing.T) {
 	p := f.preview(fmt.Sprintf(`{"license_id":%q,"quantity":2}`, f.lic.ID))
 	tok, _ := f.h.openChange(p["preview_token"].(string))
 	f.fake.mu.Lock()
+	// "keygate-change:" is the FROZEN idempotency prefix the handler builds
+	// its Stripe key with; the fake must pre-record the same key.
 	f.fake.sent = map[string]string{fmt.Sprintf("keygate-change:%s:%s:%d:%d", f.lic.ID, f.team.StripePriceID, 2, tok.ProrationDate): "other"}
 	f.fake.replies = map[string]string{}
 	f.fake.mu.Unlock()

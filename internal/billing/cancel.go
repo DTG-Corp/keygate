@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // endCanceled honours cancel-at-period-end: the customer keeps the period

@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/crypto"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/testsupport"
+	"github.com/dtg-corp/dsoft/internal/crypto"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/testsupport"
 )
 
 // A 32-byte test key for the settings AEAD.

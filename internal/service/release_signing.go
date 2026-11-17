@@ -14,10 +14,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/tabloy/keygate/internal/crypto"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/storage"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/crypto"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/storage"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // ReleaseSigningService manages per-product Ed25519 keypairs and signs

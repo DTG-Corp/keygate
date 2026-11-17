@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/testsupport"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/testsupport"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 // vnMidnight is a period end whose UTC date (30/11) differs from the

@@ -3,8 +3,8 @@ package service
 import (
 	"context"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // LicenseFeatures returns the features a license actually has: its

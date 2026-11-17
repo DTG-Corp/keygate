@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/testsupport"
+	"github.com/dtg-corp/dsoft/internal/testsupport"
 )
 
 // TestClaimProcessedEvent separates the three outcomes callers must

@@ -36,26 +36,26 @@ type InvoiceItem struct {
 type Invoice struct {
 	bun.BaseModel `bun:"table:invoices"`
 
-	ID                string          `bun:",pk" json:"id"`
-	Number            string          `bun:",notnull" json:"number"`
-	OrderID           string          `bun:",notnull" json:"order_id"`
-	LicenseID         string          `bun:",nullzero" json:"license_id,omitempty"`
-	Buyer             json.RawMessage `bun:",notnull,type:jsonb" json:"buyer"`
-	Items             []InvoiceItem   `bun:",notnull,type:jsonb" json:"items"`
-	SubtotalMinor     int64           `bun:",notnull" json:"subtotal_minor"`
-	DiscountMinor     int64           `bun:",notnull,default:0" json:"discount_minor"`
-	TaxMinor          int64           `bun:",notnull,default:0" json:"tax_minor"`
-	TotalMinor        int64           `bun:",notnull" json:"total_minor"`
-	Currency          string          `bun:",notnull" json:"currency"`
-	CurrencyExp       int16           `bun:"currency_exponent,notnull" json:"currency_exponent"`
-	Status            string          `bun:",notnull" json:"status"`
-	PDFPath           string          `bun:",notnull,default:''" json:"pdf_path"`
-	EInvoiceProvider  string          `bun:",notnull,default:''" json:"e_invoice_provider"`
-	EInvoiceRef       string          `bun:",notnull,default:''" json:"e_invoice_ref"`
-	EInvoiceStatus    string          `bun:",notnull,default:''" json:"e_invoice_status"`
-	IssuedAt          *time.Time      `json:"issued_at,omitempty"`
-	CreatedAt         time.Time       `bun:",nullzero,default:now()" json:"created_at"`
-	UpdatedAt         time.Time       `bun:",nullzero,default:now()" json:"updated_at"`
+	ID               string          `bun:",pk" json:"id"`
+	Number           string          `bun:",notnull" json:"number"`
+	OrderID          string          `bun:",notnull" json:"order_id"`
+	LicenseID        string          `bun:",nullzero" json:"license_id,omitempty"`
+	Buyer            json.RawMessage `bun:",notnull,type:jsonb" json:"buyer"`
+	Items            []InvoiceItem   `bun:",notnull,type:jsonb" json:"items"`
+	SubtotalMinor    int64           `bun:",notnull" json:"subtotal_minor"`
+	DiscountMinor    int64           `bun:",notnull,default:0" json:"discount_minor"`
+	TaxMinor         int64           `bun:",notnull,default:0" json:"tax_minor"`
+	TotalMinor       int64           `bun:",notnull" json:"total_minor"`
+	Currency         string          `bun:",notnull" json:"currency"`
+	CurrencyExp      int16           `bun:"currency_exponent,notnull" json:"currency_exponent"`
+	Status           string          `bun:",notnull" json:"status"`
+	PDFPath          string          `bun:",notnull,default:''" json:"pdf_path"`
+	EInvoiceProvider string          `bun:",notnull,default:''" json:"e_invoice_provider"`
+	EInvoiceRef      string          `bun:",notnull,default:''" json:"e_invoice_ref"`
+	EInvoiceStatus   string          `bun:",notnull,default:''" json:"e_invoice_status"`
+	IssuedAt         *time.Time      `json:"issued_at,omitempty"`
+	CreatedAt        time.Time       `bun:",nullzero,default:now()" json:"created_at"`
+	UpdatedAt        time.Time       `bun:",nullzero,default:now()" json:"updated_at"`
 }
 
 // InvoiceCounter is the per-year numbering row. The invoice writer locks
