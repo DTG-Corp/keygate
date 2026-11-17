@@ -170,10 +170,11 @@ func (s *Service) expireIfDue(ctx context.Context, sub *model.Subscription, lic 
 
 // EndGraceExpiredLicense is the billing engine's say in the generic
 // grace sweep (service.ExpiryChecker.EndGraceExpiredUpgrade). A licence
-// with a SePay or PayOS subscription belongs to this engine: the sweep
-// must not expire it on the licence's valid_until alone, because the
+// with a live SePay or PayOS subscription belongs to this engine: the
+// sweep must not expire it on the licence's valid_until alone, because the
 // dunning hold runs past that. The engine's own hourly pass does the
-// expiry, with the webhook that goes with it.
+// expiry, with the webhook that goes with it. A closed subscription is
+// left to the sweep.
 func (s *Service) EndGraceExpiredLicense(ctx context.Context, lic *model.License, cutoff time.Time) (bool, error) {
 	if lic == nil || s.deps.Store == nil {
 		return false, nil
@@ -189,15 +190,23 @@ func (s *Service) EndGraceExpiredLicense(ctx context.Context, lic *model.License
 	return true, err
 }
 
-// billingManaged reports whether the subscription is one this engine
-// runs. Stripe subscriptions keep their own lifecycle and are never read
-// or written here.
+// billingManaged reports whether the subscription is one this engine is
+// still driving. Stripe subscriptions keep their own lifecycle and are
+// never read or written here. A subscription the engine has closed (a
+// cancel-at-period-end that took effect, a lapsed trial) is no longer in
+// the scan, so its licence belongs to the platform's grace sweep again:
+// claiming it here would park the licence outside every sweep.
 func billingManaged(sub *model.Subscription) bool {
 	if sub == nil {
 		return false
 	}
 	switch sub.PaymentProvider {
 	case "sepay", "payos":
+	default:
+		return false
+	}
+	switch sub.Status {
+	case model.StatusActive, model.StatusTrialing, model.StatusPastDue:
 		return true
 	}
 	return false

@@ -324,6 +324,14 @@ func TestEndGraceExpiredLicenseClaimsBillingSubscriptions(t *testing.T) {
 		t.Fatalf("status = %q, want expired once the hold is over", got)
 	}
 
+	// A closed subscription is no longer driven by the engine: the
+	// platform sweep owns the licence from here.
+	closed := r.seed(seedOpts{End: end, Price: 250_000, SubStatus: model.StatusCanceled})
+	handled, err = r.svc.EndGraceExpiredLicense(ctx, r.licence(closed.Licence.ID), end)
+	if err != nil || handled {
+		t.Fatalf("closed subscription handled = %v, err = %v, want left to the sweep", handled, err)
+	}
+
 	stripe := r.seed(seedOpts{Provider: "stripe", Price: 250_000, End: end})
 	handled, err = r.svc.EndGraceExpiredLicense(ctx, r.licence(stripe.Licence.ID), end)
 	if err != nil || handled {
