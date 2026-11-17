@@ -365,7 +365,11 @@ func TestCancelSubscriptionAtPeriodEndOnce(t *testing.T) {
 	s := testdb.Store(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	end := now.Add(-time.Hour)
+	// The fixture pins valid_until through Postgres, which keeps
+	// microseconds: a wall-clock value with nanoseconds would come back
+	// truncated and never compare equal on a host whose clock has
+	// sub-microsecond resolution (CI on Linux).
+	end := now.Add(-time.Hour).Truncate(time.Microsecond)
 	f := seedBillingFixture(t, s, billingOpts{End: end, Cancel: true})
 
 	ok, err := s.CancelSubscriptionAtPeriodEnd(ctx, f.Sub, now)
