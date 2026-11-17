@@ -2,6 +2,7 @@ package config
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -227,5 +228,37 @@ func TestStripeLivemodeDerivation(t *testing.T) {
 					tc.envVal, tc.envSet, tc.secretKey, got, tc.want)
 			}
 		})
+	}
+}
+
+// PAYMENT_MODE picks the mode a resolve call gets when it omits one. It
+// defaults to live and rejects anything but test/live, like the other
+// startup settings: a typo must fail the boot, not silently pick live.
+func TestLoadPaymentMode(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example/keygate")
+	t.Setenv("JWT_SECRET", strings.Repeat("a", 32))
+	t.Setenv("LICENSE_SIGNING_KEY", strings.Repeat("ab", 32))
+
+	t.Setenv("PAYMENT_MODE", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load with default mode: %v", err)
+	}
+	if cfg.PaymentMode != "live" {
+		t.Fatalf("default PaymentMode = %q, want live", cfg.PaymentMode)
+	}
+
+	t.Setenv("PAYMENT_MODE", " TEST ")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("load with test mode: %v", err)
+	}
+	if cfg.PaymentMode != "test" {
+		t.Fatalf("PaymentMode = %q, want test", cfg.PaymentMode)
+	}
+
+	t.Setenv("PAYMENT_MODE", "production")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid PAYMENT_MODE was accepted")
 	}
 }

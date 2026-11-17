@@ -74,6 +74,42 @@ func newAPIFixture(t *testing.T) *apiFixture {
 	return f
 }
 
+// providerConfigSlot names one (provider, product, mode) row of
+// payment_provider_configs. The empty ProductID is the install-wide
+// default row.
+type providerConfigSlot struct {
+	Provider  string
+	ProductID string
+	Mode      string
+}
+
+// cleanupProviderConfigSlots deletes the named rows when the test ends,
+// whether it passed or failed part-way. It keys on the slot rather than
+// a row id: the integration database is shared by every package and
+// outlives one run, so a row an interrupted earlier run left in the slot
+// is picked up by the next Upsert and must be removed too. The
+// install-wide rows (ProductID "") matter most: a handler test seals
+// them with this package's codec, and another package resolving the same
+// slot with a different master key then fails to decrypt the ciphertext
+// instead of falling back to "not configured".
+func (f *apiFixture) cleanupProviderConfigSlots(t *testing.T, slots ...providerConfigSlot) {
+	t.Helper()
+	t.Cleanup(func() {
+		for _, slot := range slots {
+			// The zero ProductID is SQL NULL, the install-wide row.
+			var productID any
+			if slot.ProductID != "" {
+				productID = slot.ProductID
+			}
+			if _, err := f.s.DB.ExecContext(context.Background(),
+				"DELETE FROM payment_provider_configs WHERE provider = ? AND product_id IS NOT DISTINCT FROM ? AND mode = ?",
+				slot.Provider, productID, slot.Mode); err != nil {
+				t.Errorf("delete provider config %s/%q/%s: %v", slot.Provider, slot.ProductID, slot.Mode, err)
+			}
+		}
+	})
+}
+
 // call runs a handler with a JSON body and returns the status and the
 // decoded envelope. key, when set, is the API key the request came with.
 func (f *apiFixture) call(fn gin.HandlerFunc, method, target, body string, key *model.APIKey, params ...gin.Param) (int, map[string]any) {
@@ -98,6 +134,30 @@ func errCode(out map[string]any) string {
 	e, _ := out["error"].(map[string]any)
 	code, _ := e["code"].(string)
 	return code
+}
+
+// bodyJSON runs a handler directly and returns the raw response body.
+func (f *apiFixture) bodyJSON(t *testing.T, fn gin.HandlerFunc, params ...gin.Param) []byte {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/", nil)
+	c.Params = params
+	fn(c)
+	return w.Body.Bytes()
+}
+
+// decodeData runs a handler and decodes the envelope's data field.
+func (f *apiFixture) decodeData(t *testing.T, fn gin.HandlerFunc, dst any, params ...gin.Param) error {
+	t.Helper()
+	var env struct {
+		Data any `json:"data"`
+	}
+	if err := json.Unmarshal(f.bodyJSON(t, fn, params...), &env); err != nil {
+		return err
+	}
+	raw, _ := json.Marshal(env.Data)
+	return json.Unmarshal(raw, dst)
 }
 
 // The export carries every plaintext key, so a key bound to one product

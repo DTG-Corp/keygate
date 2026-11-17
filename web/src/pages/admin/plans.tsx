@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Copy, Package, Pencil, Plus, Trash2 } from "lucide-react"
+import { Copy, Package, Pencil, Plus, Tag, Trash2 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { CopyableId } from "@/components/copyable-id"
@@ -283,6 +283,14 @@ export default function PlansPage() {
                         </DataTableCell>
                         <DataTableCell>
                           <div className="flex justify-end gap-1">
+                            {/* The price editor is the only way to make
+                                a plan sellable; without a row action it
+                                was reachable only by typing the URL. */}
+                            <Button asChild variant="ghost" size="icon" title={t("admin.prices_title")}>
+                              <Link to={`/admin/plans/${p.id}/prices`} aria-label={t("admin.prices_title")}>
+                                <Tag className="h-4 w-4" />
+                              </Link>
+                            </Button>
                             {p.checkout_id && (
                               <Button
                                 variant="ghost"

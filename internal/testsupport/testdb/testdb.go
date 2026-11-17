@@ -11,6 +11,22 @@ import (
 	"github.com/tabloy/keygate/internal/store"
 )
 
+// Store opens the integration database or skips the test when
+// TEST_DATABASE_URL is unset, matching the repo's integration-test style.
+func Store(t *testing.T) *store.Store {
+	t.Helper()
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	s, err := store.New(dsn)
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
 // Main runs a package's tests; its TestMain hands over to it. With
 // TEST_DATABASE_URL set, it first brings that database to the latest
 // schema, so no integration test depends on another one, in this

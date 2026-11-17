@@ -1,12 +1,16 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react"
 import en from "./locales/en"
+import vi from "./locales/vi"
 import zh from "./locales/zh"
 
-type Locale = "en" | "zh"
+type Locale = "en" | "zh" | "vi"
 type TranslationKeys = keyof typeof en
 type Translations = Record<TranslationKeys, string>
 
-const locales: Record<Locale, Translations> = { en, zh }
+// A locale may translate only part of the app; the lookup below falls
+// back to English for the rest. Vietnamese currently covers the payment
+// surfaces, which is where it is required.
+const locales: Record<Locale, Partial<Translations>> = { en, zh, vi }
 
 interface I18nContextType {
   locale: Locale
@@ -24,6 +28,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     if (saved && locales[saved]) return saved
     const browserLang = navigator.language.toLowerCase()
     if (browserLang.startsWith("zh")) return "zh"
+    if (browserLang.startsWith("vi")) return "vi"
     return "en"
   })
 

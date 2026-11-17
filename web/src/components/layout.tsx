@@ -1,7 +1,9 @@
 import {
+  AlertCircle,
   BarChart3,
   Blocks,
   ChevronDown,
+  CreditCard,
   FileKey2,
   Heart,
   Key,
@@ -11,6 +13,7 @@ import {
   LogOut,
   Menu,
   Package,
+  Receipt,
   Rocket,
   ScrollText,
   Settings,
@@ -61,6 +64,14 @@ export function AdminLayout() {
       items: [
         { to: "/admin/licenses", label: t("nav.licenses"), icon: Key },
         { to: "/admin/customers", label: t("nav.customers"), icon: Users },
+      ],
+    },
+    {
+      label: t("admin.payments"),
+      items: [
+        { to: "/admin/payments/orders", label: t("admin.orders"), icon: Receipt },
+        { to: "/admin/payments/unmatched", label: t("admin.unmatched"), icon: AlertCircle },
+        { to: "/admin/payments/providers", label: t("admin.providers"), icon: CreditCard },
       ],
     },
     {

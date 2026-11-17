@@ -4758,6 +4758,13 @@ var settingsWritable = map[string]bool{
 	"cloudflare_from":       true,
 	"cloudflare_account_id": true,
 	"cloudflare_api_token":  true, // secret (see settingsSecret)
+	// Payments. Checkout and the webhook URL builder read these; without
+	// them here an operator could not change the default rail, the order
+	// TTL or the URL providers call without a direct database write.
+	"payment_default_provider":  true,
+	"payment_order_ttl_minutes": true,
+	"payment_return_base_url":   true,
+	"payment_webhook_base_url":  true,
 }
 
 // The on/off switch of every automated email an admin may turn off
@@ -4790,8 +4797,9 @@ var settingsSecret = map[string]bool{
 // "licensed_only" as open registration, so "licensedonly" would report
 // saved while leaving the endpoint open to strangers.
 var settingsEnum = map[string][]string{
-	"signup_mode":    {"open", "licensed_only"},
-	"email_provider": {"smtp", "cloudflare"},
+	"signup_mode":              {"open", "licensed_only"},
+	"email_provider":           {"smtp", "cloudflare"},
+	"payment_default_provider": {"sepay", "payos"},
 }
 
 // settingsServerOwned lists keys the server writes for itself — the

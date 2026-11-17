@@ -170,6 +170,14 @@ type Product struct {
 	// is refused until that cache has drained.
 	FeedGatedAt *time.Time `json:"feed_gated_at,omitempty"`
 
+	// TaxRateBP is the VAT rate in basis points (1000 = 10%) used when
+	// a VN payment order is priced. PriceIncludesTax says whether the
+	// plan's listed price already contains that tax; nil means "not
+	// set" and lets the database default (true) apply, so a caller that
+	// omits the field does not silently write false.
+	TaxRateBP        int   `bun:",notnull" json:"tax_rate_bp"`
+	PriceIncludesTax *bool `bun:",nullzero" json:"price_includes_tax,omitempty"`
+
 	CreatedAt time.Time `bun:",nullzero,default:now()" json:"created_at"`
 }
 
@@ -206,10 +214,17 @@ type APIKey struct {
 // We resist the urge to pre-emptively add every read/write split.
 // Real customer asks decide what gets added (e.g. usage:write,
 // licenses:read). Keep this list short and meaningful.
+//
+// payments:write / payments:read are the exception the consumer
+// payments API forced: a merchant backend that creates orders is a
+// different principal from the one that reconciles them, and the split
+// is what lets the read-only one hold nothing that can move money.
 const (
 	ScopeAdmin         = "admin"
 	ScopeLicensesWrite = "licenses:write"
 	ScopeReleasesWrite = "releases:write"
+	ScopePaymentsWrite = "payments:write"
+	ScopePaymentsRead  = "payments:read"
 )
 
 // AllScopes is the closed enumeration used to validate
@@ -217,7 +232,10 @@ const (
 // rejected at the boundary so a typo doesn't silently become a
 // useless key.
 func AllScopes() []string {
-	return []string{ScopeAdmin, ScopeLicensesWrite, ScopeReleasesWrite}
+	return []string{
+		ScopeAdmin, ScopeLicensesWrite, ScopeReleasesWrite,
+		ScopePaymentsWrite, ScopePaymentsRead,
+	}
 }
 
 // IsValidScope reports whether s is a known scope.
@@ -844,6 +862,7 @@ type LicenseRenewal struct {
 
 	ID                      string     `bun:",pk" json:"id"`
 	LicenseID               string     `bun:",notnull" json:"license_id"`
+	PaymentOrderID          string     `bun:",nullzero" json:"payment_order_id,omitempty"`
 	StripeCheckoutSessionID string     `bun:",notnull,default:''" json:"stripe_checkout_session_id,omitempty"`
 	StripePaymentIntentID   string     `bun:",notnull,default:''" json:"stripe_payment_intent_id,omitempty"`
 	Days                    int        `bun:",notnull" json:"days"`
@@ -880,6 +899,7 @@ type LicenseUpgrade struct {
 
 	ID                      string     `bun:",pk" json:"id"`
 	LicenseID               string     `bun:",notnull" json:"license_id"`
+	PaymentOrderID          string     `bun:",nullzero" json:"payment_order_id,omitempty"`
 	ToPlanID                string     `bun:",nullzero" json:"to_plan_id,omitempty"`
 	State                   string     `bun:",notnull" json:"state"`
 	StripeCheckoutSessionID string     `bun:",notnull" json:"stripe_checkout_session_id"`
@@ -1111,6 +1131,15 @@ const (
 	EventReleasePublished        = "release.published"
 	EventReleaseYanked           = "release.yanked"
 	EventReleaseUnyanked         = "release.unyanked"
+
+	// Payment events (phase 1a, spec §11). These are the only four the
+	// VN rails emit: an order was opened, an order was paid, and the
+	// provider-side payment succeeded or failed. The expired/canceled/
+	// refunded order events belong to phase 1b.
+	EventOrderCreated     = "order.created"
+	EventOrderPaid        = "order.paid"
+	EventPaymentSucceeded = "payment.succeeded"
+	EventPaymentFailed    = "payment.failed"
 )
 
 // WebhookEvents is every event a webhook can subscribe to. Delivery
@@ -1124,6 +1153,7 @@ var WebhookEvents = []string{
 	EventLicenseRevoked, EventLicensePaymentFailed, EventLicensePaymentRecovered,
 	EventLicenseQuantityChanged, EventQuotaWarning, EventQuotaExceeded,
 	EventSeatAdded, EventSeatRemoved, EventPlanChanged, EventReleasePublished, EventReleaseYanked, EventReleaseUnyanked,
+	EventOrderCreated, EventOrderPaid, EventPaymentSucceeded, EventPaymentFailed,
 }
 
 // IsValidWebhookEvent reports whether e is in WebhookEvents.

@@ -33,6 +33,13 @@ import (
 	"github.com/tabloy/keygate/internal/middleware"
 	"github.com/tabloy/keygate/internal/model"
 	"github.com/tabloy/keygate/internal/payment"
+	"github.com/tabloy/keygate/internal/payment/checkout"
+	"github.com/tabloy/keygate/internal/payment/provider"
+	"github.com/tabloy/keygate/internal/payment/providercfg"
+	"github.com/tabloy/keygate/internal/payment/providers/payos"
+	"github.com/tabloy/keygate/internal/payment/providers/sepay"
+	"github.com/tabloy/keygate/internal/payment/reconcile"
+	"github.com/tabloy/keygate/internal/payment/settlement"
 	"github.com/tabloy/keygate/internal/service"
 	"github.com/tabloy/keygate/internal/storage"
 	"github.com/tabloy/keygate/internal/store"
@@ -349,6 +356,11 @@ func main() {
 	// Subkeys are purpose-isolated — ciphertext from one cannot decrypt
 	// under another.
 	var releaseSigner *service.ReleaseSigningService
+	// Provider secrets are sealed under the same master key with their
+	// own purpose. Without it the admin routes are not registered, so
+	// credentials cannot be written in plaintext; checkout then treats
+	// every provider as unconfigured.
+	var paymentCodec *providercfg.Codec
 	if cfg.IsMasterEncryptionKeyConfigured() {
 		masterRaw, err := hex.DecodeString(cfg.ReleaseKeyEncryptionKey)
 		if err != nil {
@@ -357,6 +369,14 @@ func main() {
 			// Wire license-key encryption — orthogonal to storage.
 			db.LicenseKeyAEAD = crypto.MustDeriveAEAD(masterRaw, "license-key")
 			logger.Info("license key encryption: enabled")
+
+			c, err := providercfg.NewCodec(masterRaw)
+			if err != nil {
+				logger.Error("payment provider config encryption disabled", "error", err)
+			} else {
+				paymentCodec = c
+				logger.Info("payment provider config encryption: enabled")
+			}
 
 			// Best-effort backfill of unencrypted historical rows. Non-blocking,
 			// resumable across restarts. No timeout — runs until done or shutdown.
@@ -429,6 +449,80 @@ func main() {
 	}
 	// Initialize thread-safe webhook secret with config value
 	stripeH.SetWebhookSecret(cfg.StripeWebhookSecret)
+
+	// Payment provider webhooks (SePay bank/IPN, PayOS) need the same
+	// provider resolver as checkout and, once verified, the settlement
+	// service. Without the master key no row can be decrypted, so the
+	// routes stay unregistered instead of answering a webhook nothing
+	// can verify.
+	var providerSvc *providercfg.Service
+	if paymentCodec != nil {
+		providerSvc = providercfg.NewService(db, paymentCodec, cfg.PaymentMode)
+	}
+	settleSvc := &settlement.Service{Store: db, Webhooks: webhookSvc, Log: logger}
+	paymentsWebhookH := &handler.PaymentsWebhookHandler{
+		Store: db, Config: providerSvc, Settlement: settleSvc, Log: logger,
+	}
+	// providerFactory maps one resolved provider row onto an adapter.
+	// Resolving is a database read plus decryption, and the adapters make
+	// no network call in New, so building one costs nothing at startup.
+	// Only this function knows how a ResolvedConfig becomes a
+	// sepay.Config or a payos.Config.
+	providerFactory := func(ctx context.Context, productID, providerName string) (provider.Provider, *providercfg.ResolvedConfig, error) {
+		if providerSvc == nil {
+			return nil, nil, providercfg.ErrProviderNotConfigured
+		}
+		cfg, err := providerSvc.Resolve(ctx, productID, providerName, "")
+		if err != nil {
+			return nil, nil, err
+		}
+		switch providerName {
+		case "sepay":
+			return sepay.New(sepay.Config{
+				Sandbox:         cfg.Mode == "test",
+				WebhookAuthMode: cfg.WebhookAuthMode,
+				APIKey:          cfg.APIKey,
+				IPNSecret:       cfg.IPNSecret,
+				APIToken:        cfg.APIToken,
+				Bank: provider.BankAccount{
+					BankName: cfg.BankName, AccountNo: cfg.AccountNo, AccountName: cfg.AccountName,
+				},
+				BankCode: cfg.BankCode,
+			}), cfg, nil
+		case "payos":
+			return payos.New(payos.Config{
+				ClientID: cfg.ClientID, APIKey: cfg.APIKey, ChecksumKey: cfg.ChecksumKey,
+			}), cfg, nil
+		default:
+			return nil, nil, providercfg.ErrProviderUnknown
+		}
+	}
+	checkoutSvc := &checkout.Service{
+		Store: db, Config: providerSvc, Providers: providerFactory,
+		Webhooks: webhookSvc, Log: logger, BaseURL: cfg.BaseURL,
+	}
+	paymentsAPIH := &handler.PaymentsAPIHandler{Checkout: checkoutSvc, Store: db}
+	paymentsPublicH := &handler.PaymentsPublicHandler{Checkout: checkoutSvc, Store: db, Stripe: stripeH}
+	paymentsAdminH := &handler.PaymentsAdminHandler{
+		Store: db, Settlement: settleSvc, Config: providerSvc, Providers: providerFactory,
+		// Registering the webhook is a PayOS client call, not an adapter
+		// method: ConfirmWebhook lives outside the Provider interface
+		// because no checkout path uses it. productID comes from the
+		// admin request and selects that product's PayOS row; "" is the
+		// install-wide row.
+		PayOSConfirmer: func(ctx context.Context, url, productID string) error {
+			if providerSvc == nil {
+				return providercfg.ErrProviderNotConfigured
+			}
+			cfg, err := providerSvc.Resolve(ctx, productID, "payos", "")
+			if err != nil {
+				return err
+			}
+			client := &payos.Client{ClientID: cfg.ClientID, APIKey: cfg.APIKey, ChecksumKey: cfg.ChecksumKey}
+			return client.ConfirmWebhook(ctx, url)
+		},
+		PublicBaseURL: cfg.BaseURL,
+	}
 	expiryChecker := service.NewExpiryChecker(db, emailSvc, webhookSvc, logger)
 	if cfg.StripeSecretKey != "" {
 		expiryChecker.EndPastDueUpgrade = stripeH.EndPastDueUpgrade
@@ -515,6 +609,18 @@ func main() {
 	go webhookSvc.StartRetryLoop(ctx, webhookRetryInterval)
 
 	go floatingSvc.StartCleanupLoop(ctx, time.Minute)
+
+	// Payment reconciliation: closes lapsed orders, asks PayOS about
+	// pending orders whose webhook never arrived and pulls the bank's
+	// transfers since the cursor. It only settles through the same
+	// service a webhook uses, so it can never grant more than one.
+	if providerSvc != nil {
+		rec := &reconcile.Worker{
+			Store: db, Config: providerSvc, Matcher: &reconcile.Matcher{Store: db},
+			Settlement: settleSvc, Log: logger,
+		}
+		go rec.Run(ctx)
+	}
 
 	go expiryChecker.StartExpiryLoop(ctx)
 
@@ -883,7 +989,7 @@ func main() {
 
 	// Anonymous plan catalogue for a pricing page — the visitor has no
 	// account yet, so /portal/plans (session-gated) can't serve them.
-	// Rate-limited because each plan may trigger a Stripe price lookup.
+	// Prices are local plan_prices rows in this phase, not Stripe calls.
 	//
 	// Its own bucket: RateLimitByIP keys every route as "ip:<addr>",
 	// so an unscoped limiter here would spend the same counter the
@@ -892,9 +998,30 @@ func main() {
 	// logging in.
 	v1.GET("/products/:product_slug/plans",
 		middleware.RateLimitByIPScoped("public_plans", cfg.RateLimitAPI, time.Minute),
-		publicPlansH.ListPlans)
+		publicPlansH.List)
 
 	v1.POST("/webhook/stripe", middleware.RateLimitByIPScoped("stripe_webhook", 60, time.Minute), stripeH.Webhook)
+
+	// Bank-rail webhooks read the request body themselves: the
+	// signature covers the provider's exact bytes, so these routes are
+	// registered outside every JSON-binding group and envelope wrapper.
+	// Each has its own limiter bucket; a retry storm for one provider
+	// must not spend another provider's or a login page's budget.
+	//
+	// SePay's optional IP allowlist is phase-1b: ParseBankWebhook gets
+	// headers and body, not the peer address, so phase 1a relies on the
+	// authenticated webhook (HMAC or Apikey) as the gate.
+	if providerSvc != nil {
+		v1.POST("/webhook/sepay",
+			middleware.RateLimitByIPScoped("sepay_webhook", 120, time.Minute),
+			paymentsWebhookH.HandleSePay)
+		v1.POST("/webhook/sepay-ipn",
+			middleware.RateLimitByIPScoped("sepay_ipn", 120, time.Minute),
+			paymentsWebhookH.HandleSePayIPN)
+		v1.POST("/webhook/payos",
+			middleware.RateLimitByIPScoped("payos_webhook", 120, time.Minute),
+			paymentsWebhookH.HandlePayOS)
+	}
 	// Stripe verify is hit by every successful checkout return, so the
 	// limit is generous, but the endpoint must NOT be naked: each call
 	// proxies to Stripe's API and an attacker could otherwise force us
@@ -903,8 +1030,34 @@ func main() {
 		middleware.RateLimitByIPScoped("checkout_verify", 60, time.Minute),
 		stripeH.VerifyCheckoutSession)
 
-	// Unified checkout: GET /pay/:checkout_id → Stripe
-	r.GET("/pay/:checkout_id", stripeH.CheckoutByPlan)
+	// Unified checkout: GET /pay/:checkout_id serves both rails. A KG
+	// order code answers 302 to the SPA pay page; everything else is a
+	// legacy Stripe checkout id and keeps that handler unchanged.
+	r.GET("/pay/:checkout_id", paymentsPublicH.PayPage)
+	// The public poller behind the pay page. The order code is the only
+	// capability: no session, no key, and no buyer identity in the body.
+	// It is mounted at the spec root path and under /api/v1 (the SPA's
+	// api client prefixes it), sharing one rate-limit scope.
+	handler.RegisterPublicStatusRoutes(r, paymentsPublicH, cfg.RateLimitAPI)
+
+	// Consumer payments API. Every key is optionally bound to one product,
+	// and the handlers refuse anything outside it; create is the only
+	// route with Idempotency, where a retry would otherwise be a second
+	// order and a second QR.
+	payWrite := v1.Group("/payments",
+		middleware.APIKeyAuth(db),
+		middleware.RequireScope(model.ScopePaymentsWrite),
+		middleware.RateLimitByIPScoped("payments_api", cfg.RateLimitAPI, time.Minute))
+	payRead := v1.Group("/payments",
+		middleware.APIKeyAuth(db),
+		middleware.RequireScope(model.ScopePaymentsRead, model.ScopePaymentsWrite),
+		middleware.RateLimitByIPScoped("payments_api", cfg.RateLimitAPI, time.Minute))
+	{
+		payWrite.POST("/orders", middleware.Idempotency(db), paymentsAPIH.Create)
+		payWrite.POST("/orders/:code/cancel", paymentsAPIH.Cancel)
+		payRead.GET("/orders/:code", paymentsAPIH.Get)
+		payRead.GET("/orders", paymentsAPIH.List)
+	}
 
 	// Self sign-up for free plans (/pay sends those plans to the form).
 	// The code-sending step shares the login's buckets, so it cannot be
@@ -1156,6 +1309,45 @@ func main() {
 		admin.PUT("/plans/:id", adminH.UpdatePlan)
 		admin.GET("/plans/:id/seat-impact", adminH.PlanSeatImpact)
 		admin.DELETE("/plans/:id", adminH.DeletePlan)
+
+		// Local plan prices are the only sellable price source in
+		// phase 1a; the editor replaces the active row per slot and
+		// retires (never deletes) the old one for order history.
+		planPriceH := handler.PlanPriceAdminHandler{Store: db}
+		admin.GET("/plans/:id/prices", planPriceH.List)
+		admin.PUT("/plans/:id/prices", planPriceH.Upsert)
+		admin.DELETE("/plans/:id/prices/:price_id", planPriceH.Delete)
+
+		// Provider rows are admin-only: the PUT carries merchant
+		// secrets, so a licenses:write key must not reach it. Without
+		// the master key the routes stay unregistered rather than
+		// store credentials unencrypted. PAYMENT_MODE (default live)
+		// is only the fallback for a request that omits its mode —
+		// each row carries the mode it was written under, and an
+		// explicit mode always wins.
+		if providerSvc != nil {
+			providerH := handler.PaymentProviderAdminHandler{Service: providerSvc, Store: db}
+			admin.GET("/payments/providers", providerH.List)
+			admin.PUT("/payments/providers", providerH.Upsert)
+			admin.DELETE("/payments/providers/:id/secrets", providerH.DeleteSecrets)
+		}
+
+		// Payment operations are admin-only, reads included: the ledger
+		// carries buyer emails, provider references and the unmatched
+		// queue's raw payloads. Manual settlement, refunds and matches
+		// are money-moving audit events, not routine merchant calls.
+		admin.GET("/payments/orders", paymentsAdminH.ListOrders)
+		admin.GET("/payments/orders/:code", paymentsAdminH.GetOrder)
+		admin.POST("/payments/orders/:code/mark-paid", paymentsAdminH.MarkPaid)
+		admin.POST("/payments/orders/:code/cancel", paymentsAdminH.CancelOrder)
+		admin.POST("/payments/orders/:code/refund", paymentsAdminH.RefundOrder)
+		admin.GET("/payments/transactions", paymentsAdminH.ListTransactions)
+		admin.GET("/payments/unmatched", paymentsAdminH.ListUnmatched)
+		admin.POST("/payments/transactions/:id/match", paymentsAdminH.MatchTransaction)
+		admin.POST("/payments/transactions/:id/ignore", paymentsAdminH.IgnoreTransaction)
+		admin.GET("/payments/health", paymentsAdminH.Health)
+		admin.POST("/payments/providers/:id/test", paymentsAdminH.TestProvider)
+		admin.POST("/payments/providers/payos/confirm-webhook", paymentsAdminH.ConfirmPayOSWebhook)
 
 		admin.POST("/entitlements", adminH.CreateEntitlement)
 		admin.PUT("/entitlements/:id", adminH.UpdateEntitlement)

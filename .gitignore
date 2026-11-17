@@ -33,6 +33,7 @@ Thumbs.db
 .cursor/
 .aider*
 .copilot/
+.superpowers/
 
 # Frontend
 web/node_modules/
@@ -48,3 +49,6 @@ seed
 
 # Stray build output from `go build ./cmd/server` without -o
 /server
+
+# Local git worktrees
+.worktrees/
