@@ -164,6 +164,33 @@ func TestCreateOrderQuantityMultipliesPrice(t *testing.T) {
 	}
 }
 
+// An upgrade credit is applied after the plan price and before the
+// provider call: it joins the discount total, lowers what the buyer pays
+// and is frozen on the order.
+func TestCreateOrderAppliesUpgradeCredit(t *testing.T) {
+	f := newFixture(t, true)
+	f.price("sepay", 1_000_000)
+	fp := fake.New("sepay")
+	svc := &checkout.Service{Store: f.s, Providers: newFactory(fp).providerFactory()}
+
+	res, err := svc.CreateOrder(f.ctx, checkout.CreateOrderInput{
+		PlanID: f.plan.ID, Email: f.email("credit"), Provider: "sepay", Quantity: 1,
+		CreditMinor: 300_000,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	order := res.Order
+	if order.SubtotalMinor != 1_000_000 || order.CreditMinor != 300_000 ||
+		order.DiscountMinor != 300_000 || order.TotalMinor != 700_000 {
+		t.Fatalf("order money = subtotal %d credit %d discount %d total %d",
+			order.SubtotalMinor, order.CreditMinor, order.DiscountMinor, order.TotalMinor)
+	}
+	if fp.Calls[0].AmountMinor != 700_000 {
+		t.Fatalf("provider amount = %d, want the credited total", fp.Calls[0].AmountMinor)
+	}
+}
+
 // A licence volume is bounded: zero, negative and runaway quantities are
 // refused before any order or provider call exists. 2^60 would otherwise
 // wrap the subtotal to a handful of dong and hand the buyer a licence

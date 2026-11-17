@@ -4765,6 +4765,19 @@ var settingsWritable = map[string]bool{
 	"payment_order_ttl_minutes": true,
 	"payment_return_base_url":   true,
 	"payment_webhook_base_url":  true,
+	// Phase 1b. The billing engine, coupon quote and invoice renderer read
+	// these; without them here an operator would need a direct database
+	// write to change the renewal lead window, the seller block on a VAT
+	// invoice, the invoice footer or the e-invoice seam.
+	"renewal_lead_days":       true,
+	"coupon_max_stack":        true,
+	"invoice_seller_name":     true,
+	"invoice_seller_tax_code": true,
+	"invoice_seller_address":  true,
+	"invoice_seller_email":    true,
+	"invoice_note":            true,
+	"invoice_auto_issue":      true,
+	"einvoice_provider":       true,
 }
 
 // The on/off switch of every automated email an admin may turn off
@@ -4776,6 +4789,8 @@ func init() {
 		settingsWritable[key] = true
 		settingsEnum[key] = []string{"true", "false"}
 	}
+	// Phase 1b switches that are booleans.
+	settingsEnum["invoice_auto_issue"] = []string{"true", "false"}
 }
 
 // settingsSecret lists keys that can be written but never read back.

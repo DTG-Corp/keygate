@@ -808,3 +808,67 @@ func TestPaymentOrderRenewalCollisionIsNotACodeRetry(t *testing.T) {
 		t.Fatalf("%d order rows exist after the rejected renewal, want 1", n)
 	}
 }
+
+// The sweep's rows are what the reconciler turns into order.expired
+// events, so it must report exactly the orders it moved — not the paid
+// one whose expiry is also in the past, and not an order it already
+// expired on an earlier tick.
+func TestExpirePaymentOrdersWithRowsReturnsMovedRows(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	productID, planID := seedProductPlan(t, s)
+	backdate := `UPDATE payment_orders SET expires_at = now() - interval '1 minute' WHERE id = ?`
+	mk := func() *model.PaymentOrder {
+		o, err := s.CreatePaymentOrder(ctx, newOrderInput(productID, planID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.DB.NewRaw(backdate, o.ID).Exec(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return o
+	}
+	expiredA, expiredB := mk(), mk()
+	paid := mk()
+	if _, err := s.MarkPaymentOrderPaid(ctx, nil, paid.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	future, err := s.CreatePaymentOrder(ctx, newOrderInput(productID, planID))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := s.ExpirePaymentOrdersWithRows(ctx, time.Now())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	moved := make(map[string]bool, len(rows))
+	for _, o := range rows {
+		moved[o.ID] = true
+		if o.Status != domain.OrderExpired {
+			t.Fatalf("returned order %s status = %q, want expired", o.Code, o.Status)
+		}
+	}
+	if !moved[expiredA.ID] || !moved[expiredB.ID] {
+		t.Fatalf("returned rows missing the expired orders: %v", moved)
+	}
+	if moved[paid.ID] || moved[future.ID] {
+		t.Fatalf("returned a paid/future order: paid=%v future=%v", moved[paid.ID], moved[future.ID])
+	}
+
+	again, err := s.ExpirePaymentOrdersWithRows(ctx, time.Now())
+	if err != nil {
+		t.Fatalf("second sweep: %v", err)
+	}
+	for _, o := range again {
+		if o.ID == expiredA.ID || o.ID == expiredB.ID {
+			t.Fatalf("second sweep returned %s again", o.Code)
+		}
+	}
+
+	// The count wrapper keeps its old contract and now delegates.
+	n, err := s.ExpirePaymentOrders(ctx, time.Now())
+	if err != nil || n != len(again) && len(again) > 0 {
+		t.Fatalf("count sweep = %d, %v; rows call returned %d", n, err, len(again))
+	}
+}

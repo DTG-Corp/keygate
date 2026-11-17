@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tabloy/keygate/internal/model"
+	"github.com/tabloy/keygate/internal/payment/coupons"
 	"github.com/tabloy/keygate/internal/payment/domain"
 	"github.com/tabloy/keygate/internal/payment/provider"
 	"github.com/tabloy/keygate/internal/payment/providercfg"
@@ -45,7 +46,32 @@ var (
 	// ErrPriceNotConfigured is re-exported so callers of checkout can
 	// errors.Is against one sentinel instead of importing store too.
 	ErrPriceNotConfigured = store.ErrPriceNotConfigured
+	// ErrKindInvalid means Kind names something other than the four
+	// order kinds of spec §3.4.
+	ErrKindInvalid = errors.New("payment order kind is invalid")
 )
+
+// The order kinds (spec §3.4). An empty Kind means KindNew, which is
+// what every phase-1a caller sends, so the zero value stays the old
+// behaviour.
+const (
+	KindNew     = "new"
+	KindRenewal = "renewal"
+	KindUpgrade = "upgrade"
+	KindAddon   = "addon"
+)
+
+// normaliseKind maps an empty kind onto KindNew and reports whether the
+// result is one of the four.
+func normaliseKind(kind string) (string, bool) {
+	switch k := strings.ToLower(strings.TrimSpace(kind)); k {
+	case "":
+		return KindNew, true
+	case KindNew, KindRenewal, KindUpgrade, KindAddon:
+		return k, true
+	}
+	return "", false
+}
 
 const (
 	defaultOrderTTL = 24 * time.Hour
@@ -92,11 +118,24 @@ type Service struct {
 	// absolute https return/cancel URLs and phase 1a has no server-side
 	// success/cancel routes, so both point at the SPA checkout pages.
 	BaseURL string
+	// Coupons prices the codes a buyer submits (spec §3.9). It is optional:
+	// without it a request carrying coupon_codes fails closed instead of
+	// silently charging the list price.
+	Coupons *coupons.Service
+	// Settler settles an order that has nothing to pay — a trial coupon
+	// makes the order free. Required for a zero-total coupon purchase.
+	Settler Settler
 }
 
 // CreateOrderInput is one checkout request. Quantity must be between 1
 // and MaxQuantity; Provider empty falls back to the configured default
 // and then to the first provider that can actually sell the plan.
+//
+// Kind empty means KindNew. A renewal, upgrade or addon names the
+// licence it applies to in LicenseID and defaults the buyer email (and,
+// for a renewal, the plan and the quantity) from that licence, so the
+// billing engine can create an order for a licence without restating
+// what the customer already bought (spec §3.4/§3.6).
 type CreateOrderInput struct {
 	PlanID         string
 	Email          string
@@ -105,17 +144,90 @@ type CreateOrderInput struct {
 	Buyer          provider.Buyer
 	Metadata       map[string]any
 	CreatedByKeyID string
+
+	Kind      string
+	LicenseID string
+	// PeriodStart/PeriodEnd are the billing period a renewal order pays
+	// for; settlement extends the licence by exactly that period.
+	PeriodStart *time.Time
+	PeriodEnd   *time.Time
+	// ExpiresAt overrides the order TTL. The billing engine uses it to
+	// keep a renewal order payable through the grace window instead of
+	// letting it lapse a day after it was created.
+	ExpiresAt *time.Time
+
+	// CouponCodes are the codes the buyer submitted, in any case and any
+	// order. IgnoreInvalidCoupons drops the ones that cannot apply
+	// instead of failing the whole request.
+	CouponCodes          []string
+	IgnoreInvalidCoupons bool
+	// ExternalCustomerID is the identity the per-customer coupon limit
+	// counts against when the caller knows one (a signed-in portal
+	// session), falling back to the buyer email.
+	ExternalCustomerID string
+	// quote is the priced result CreateOrder already computed. It is
+	// unexported on purpose: pricing happens exactly once, inside
+	// checkout, and createOrder reuses the number the buyer was shown.
+	quote *coupons.Quote
+	// CreditMinor is the unused-time credit an immediate plan upgrade
+	// applies to the target price. It joins the order's discount — the
+	// tax is not recomputed — and is stored on the order
+	// (payment_orders.credit_minor) so settlement and the invoice see the
+	// same number.
+	CreditMinor int64
 }
 
 // OrderResult is the order and the instruction the buyer pays with. A
 // retried create whose previous instruction is still payable returns the
-// original pair rather than minting a second QR.
+// original pair rather than minting a second QR. Created is true when
+// this call wrote the order, which is what the billing engine uses to
+// emit license.renewal_due exactly once per order. Discounts is the
+// coupon snapshot the order was priced with (spec §3.9), carried here so
+// a response can show the breakdown without a second read.
 type OrderResult struct {
-	Order   *model.PaymentOrder
-	Attempt *model.PaymentAttempt
+	Order     *model.PaymentOrder
+	Attempt   *model.PaymentAttempt
+	Created   bool
+	Discounts []*model.PaymentOrderDiscount
 }
 
 func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderResult, error) {
+	kind, ok := normaliseKind(in.Kind)
+	if !ok {
+		return nil, fmt.Errorf("%w: %q is not one of new, renewal, upgrade, addon", ErrKindInvalid, in.Kind)
+	}
+	now := time.Now()
+	if in.ExpiresAt != nil && !in.ExpiresAt.After(now) {
+		return nil, fmt.Errorf("%w: expires_at must be in the future", ErrPlanNotSellable)
+	}
+	// A licence-backed order defaults what the customer already owns.
+	var lic *model.License
+	if in.LicenseID != "" {
+		var err error
+		lic, err = s.Store.FindLicenseByID(ctx, in.LicenseID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: licence %s not found", ErrPlanNotSellable, in.LicenseID)
+		}
+	}
+	switch kind {
+	case KindNew:
+		if lic != nil {
+			return nil, fmt.Errorf("%w: a new order does not name a licence", ErrPlanNotSellable)
+		}
+	default:
+		if lic == nil {
+			return nil, fmt.Errorf("%w: a %s order must name the licence it applies to", ErrPlanNotSellable, kind)
+		}
+		if in.Email == "" {
+			in.Email = lic.Email
+		}
+		if in.Quantity < 1 {
+			in.Quantity = lic.Quantity
+		}
+		if kind == KindRenewal && strings.TrimSpace(in.PlanID) == "" {
+			in.PlanID = lic.PlanID
+		}
+	}
 	if in.Quantity < 1 || in.Quantity > MaxQuantity {
 		return nil, fmt.Errorf("%w: quantity must be between 1 and %d", ErrQuantityInvalid, MaxQuantity)
 	}
@@ -123,12 +235,29 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 	if email == "" || !strings.Contains(email, "@") {
 		return nil, fmt.Errorf("%w: a buyer email is required for the licence", ErrPlanNotSellable)
 	}
+	// An invoice request without a usable tax code fails here, before an
+	// order exists: an invoice that cannot be issued is not a late
+	// problem, it is this request's problem.
+	if err := validateBuyer(in.Buyer); err != nil {
+		return nil, err
+	}
+	in.Buyer.TaxCode = normaliseTaxCode(in.Buyer.TaxCode)
 	plan, err := s.Store.FindPlanByID(ctx, in.PlanID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: plan not found", ErrPlanNotSellable)
 	}
 	if !plan.Active {
 		return nil, fmt.Errorf("%w: plan is inactive", ErrPlanNotSellable)
+	}
+	// A licence-backed order may only buy from its own product, and an
+	// upgrade has to change something.
+	if lic != nil {
+		if lic.ProductID != plan.ProductID {
+			return nil, fmt.Errorf("%w: the licence belongs to another product", ErrPlanNotSellable)
+		}
+		if kind == KindUpgrade && lic.PlanID == plan.ID {
+			return nil, fmt.Errorf("%w: an upgrade must name a different plan", ErrPlanNotSellable)
+		}
 	}
 	product, err := s.Store.FindProductByID(ctx, plan.ProductID)
 	if err != nil {
@@ -138,26 +267,63 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 	if err != nil {
 		return nil, err
 	}
+	quote, err := s.quoteFor(ctx, plan, product, price, email, in)
+	if err != nil {
+		return nil, err
+	}
+	in.quote = quote
+	signature := coupons.CodesSignature(quote.Codes())
+
+	// A coupon that makes the order free is settled at creation: there is
+	// no amount to collect and no payment instruction to wait for. A
+	// retried create gets the order that was already settled back, so a
+	// trial is never granted twice.
+	if zeroTotalNeedsSettlement(quote) {
+		paid, err := s.paidZeroOrder(ctx, plan, email, providerName, in.Quantity, price.ID)
+		if err != nil {
+			return nil, err
+		}
+		if paid != nil {
+			return &OrderResult{Order: paid, Discounts: discountRows(quote)}, nil
+		}
+	}
 
 	// Reuse this buyer's still-open order for the same purchase. A
 	// retried create must not ask PayOS for a second link for one
 	// orderCode, nor mint a second QR for one bank transfer. An attempt
 	// that is still payable is handed back untouched; a failed or
 	// expired one is replaced on the same order.
-	order, latest, err := s.resumableOrder(ctx, plan, email, providerName, in.Quantity, price.ID)
+	order, latest, err := s.resumableOrder(ctx, kind, plan, email, providerName, in.Quantity, price.ID, in)
 	if err != nil {
 		return nil, err
 	}
+	if order != nil && coupons.OrderSignature(order) != signature {
+		// The open order was priced with different codes. Reusing it would
+		// charge a price this request never quoted, so it is left for the
+		// expiry sweeper and a fresh order is written.
+		order, latest = nil, nil
+	}
 	created := false
-	if order != nil && latest != nil && (payableAttempt(latest, time.Now()) || latest.Status == domain.AttemptSucceeded) {
-		return &OrderResult{Order: order, Attempt: latest}, nil
+	if order != nil && latest != nil && (payableAttempt(latest, now) || latest.Status == domain.AttemptSucceeded) {
+		return &OrderResult{Order: order, Attempt: latest, Discounts: discountRows(quote)}, nil
 	}
 	if order == nil {
-		order, err = s.createOrder(ctx, plan, product, price, email, providerName, in)
+		order, err = s.createOrder(ctx, kind, plan, product, price, email, providerName, in)
 		if err != nil {
 			return nil, err
 		}
 		created = true
+	}
+
+	// A free order (trial coupon, or a code worth the whole price) never
+	// gets a payment instruction: it is settled here, through the same
+	// settlement service a paid webhook uses, so the licence, the events
+	// and the paid hooks all run exactly as they would for money.
+	if order.TotalMinor == 0 && zeroTotalNeedsSettlement(quote) {
+		if created {
+			s.Webhooks.Dispatch(ctx, product.ID, model.EventOrderCreated, map[string]any{"order": order})
+		}
+		return s.settleZeroTotal(ctx, order, providerName, quote)
 	}
 
 	// The attempt never outlives its order: a reused order is up to a
@@ -212,28 +378,24 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 	if created {
 		s.Webhooks.Dispatch(ctx, product.ID, model.EventOrderCreated, map[string]any{"order": order})
 	}
-	return &OrderResult{Order: order, Attempt: attempt}, nil
+	return &OrderResult{Order: order, Attempt: attempt, Created: created, Discounts: discountRows(quote)}, nil
 }
 
 // createOrder prices one quantity of a plan and writes the order.
 func (s *Service) createOrder(
-	ctx context.Context, plan *model.Plan, product *model.Product,
+	ctx context.Context, kind string, plan *model.Plan, product *model.Product,
 	price *model.PlanPrice, email, providerName string, in CreateOrderInput,
 ) (*model.PaymentOrder, error) {
-	subtotal, err := orderSubtotal(price.AmountMinor, in.Quantity)
-	if err != nil {
-		return nil, err
+	quote := in.quote
+	if quote == nil {
+		q, err := s.quoteFor(ctx, plan, product, price, email, in)
+		if err != nil {
+			return nil, err
+		}
+		quote = q
 	}
 	taxRate := product.TaxRateBP
-	priceIncludesTax := true
-	if product.PriceIncludesTax != nil {
-		priceIncludesTax = *product.PriceIncludesTax
-	}
-	totals := domain.ComputeTotals(subtotal, 0, taxRate, priceIncludesTax)
-	metadata := make(map[string]any, len(in.Metadata))
-	for k, v := range in.Metadata {
-		metadata[k] = v
-	}
+	metadata := couponMetadata(in.Metadata, quote, in.ExternalCustomerID)
 	metaJSON, err := json.Marshal(metadata)
 	if err != nil {
 		return nil, fmt.Errorf("%w: metadata is not encodable: %w", ErrPlanNotSellable, err)
@@ -242,13 +404,52 @@ func (s *Service) createOrder(
 	if err != nil {
 		return nil, fmt.Errorf("%w: buyer is not encodable: %w", ErrPlanNotSellable, err)
 	}
+	// A trial coupon reserves the period the licence will be granted for:
+	// the quote carries max(coupon.trial_days, plan.trial_days) (spec
+	// §3.9), and settlement reads the reservation rather than recomputing
+	// it from a plan that may have changed in between. A renewal carries
+	// the period it pays for instead.
+	periodEnd := in.PeriodEnd
+	if periodEnd == nil && quote.TrialDays > 0 {
+		end := time.Now().Add(time.Duration(quote.TrialDays) * 24 * time.Hour)
+		periodEnd = &end
+	}
+	subtotal, discount, tax, total := quote.SubtotalMinor, quote.DiscountMinor, quote.TaxMinor, quote.TotalMinor
+	// An immediate upgrade pays the prorated target price less the unused
+	// time the customer already bought. The credit is an extra discount:
+	// it never exceeds the net price, and total stays
+	// subtotal - discount + tax (tax unchanged), so the invoice's
+	// snapshot still adds up.
+	credit := int64(0)
+	if in.CreditMinor > 0 {
+		credit = in.CreditMinor
+		if ceiling := subtotal - discount; credit > ceiling {
+			credit = ceiling
+		}
+		if credit < 0 {
+			credit = 0
+		}
+		discount += credit
+		total -= credit
+		if total < 0 {
+			total = 0
+		}
+	}
+	expiresAt := time.Now().Add(s.orderTTL(ctx))
+	if in.ExpiresAt != nil {
+		expiresAt = *in.ExpiresAt
+	}
 	return s.Store.CreatePaymentOrder(ctx, store.CreateOrderInput{
-		ProductID: product.ID, PlanID: plan.ID, PriceID: price.ID, Email: email, Kind: "new",
-		Quantity: in.Quantity, SubtotalMinor: subtotal, DiscountMinor: totals.DiscountMinor,
-		TaxMinor: totals.TaxMinor, TotalMinor: totals.TotalMinor,
+		ProductID: product.ID, PlanID: plan.ID, PriceID: price.ID, Email: email, Kind: kind,
+		Quantity: in.Quantity, SubtotalMinor: subtotal, DiscountMinor: discount,
+		TaxMinor: tax, TotalMinor: total, CreditMinor: credit,
 		Currency: settlementCurrency, CurrencyExponent: domain.CurrencyExponent(settlementCurrency),
-		TaxRateBP: taxRate, Provider: providerName, ExpiresAt: time.Now().Add(s.orderTTL(ctx)),
+		TaxRateBP: taxRate, Provider: providerName, ExpiresAt: expiresAt,
 		Buyer: buyerJSON, Metadata: metaJSON, CreatedByKeyID: in.CreatedByKeyID,
+		Discounts: orderDiscounts(quote), PeriodEnd: periodEnd,
+		// LicenseID/PeriodStart place a renewal on the licence it extends;
+		// payment_orders_renewal_once keys a retry off exactly this period.
+		LicenseID: in.LicenseID, PeriodStart: in.PeriodStart,
 	})
 }
 
@@ -258,24 +459,36 @@ func (s *Service) createOrder(
 // There is no store helper for this lookup: every store/payments.go
 // reader is keyed by an order identifier, and the reusable order is the
 // one the caller has not been told about yet. The predicate is narrow on
-// purpose — same plan, price, quantity, provider and buyer — so two
-// genuinely different purchases never collapse into one.
+// purpose, and per kind: a new order is keyed on what it buys (plan,
+// price, quantity, provider, buyer), while a licence-backed order is
+// keyed on the licence it applies to — a renewal also on the period it
+// pays for, so a second period can never reuse the first one's order.
 func (s *Service) resumableOrder(
-	ctx context.Context, plan *model.Plan, email, providerName string, quantity int, priceID string,
+	ctx context.Context, kind string, plan *model.Plan, email, providerName string,
+	quantity int, priceID string, in CreateOrderInput,
 ) (*model.PaymentOrder, *model.PaymentAttempt, error) {
 	order := new(model.PaymentOrder)
-	err := s.Store.DB.NewSelect().Model(order).
-		Where("product_id = ?", plan.ProductID).
-		Where("plan_id = ?", plan.ID).
-		Where("price_id = ?", priceID).
-		Where("email = ?", email).
-		Where("provider = ?", providerName).
-		Where("quantity = ?", quantity).
-		Where("kind = ?", "new").
+	q := s.Store.DB.NewSelect().Model(order).
 		Where("status = ?", domain.OrderPending).
-		Where("expires_at > ?", time.Now()).
-		Order("created_at DESC", "id DESC").
-		Limit(1).Scan(ctx)
+		Where("expires_at > ?", time.Now())
+	switch kind {
+	case KindRenewal:
+		q = q.Where("kind = ?", kind).Where("license_id = ?", in.LicenseID)
+		if in.PeriodEnd != nil {
+			q = q.Where("period_end = ?", *in.PeriodEnd)
+		}
+	case KindUpgrade, KindAddon:
+		q = q.Where("kind = ?", kind).Where("license_id = ?", in.LicenseID).Where("plan_id = ?", plan.ID)
+	default:
+		q = q.Where("product_id = ?", plan.ProductID).
+			Where("plan_id = ?", plan.ID).
+			Where("price_id = ?", priceID).
+			Where("email = ?", email).
+			Where("provider = ?", providerName).
+			Where("quantity = ?", quantity).
+			Where("kind = ?", KindNew)
+	}
+	err := q.Order("created_at DESC", "id DESC").Limit(1).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, nil
 	}

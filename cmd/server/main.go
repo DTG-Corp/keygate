@@ -25,6 +25,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stripe/stripe-go/v82"
 
+	"github.com/tabloy/keygate/internal/billing"
 	"github.com/tabloy/keygate/internal/branding"
 	"github.com/tabloy/keygate/internal/config"
 	"github.com/tabloy/keygate/internal/crypto"
@@ -34,6 +35,9 @@ import (
 	"github.com/tabloy/keygate/internal/model"
 	"github.com/tabloy/keygate/internal/payment"
 	"github.com/tabloy/keygate/internal/payment/checkout"
+	"github.com/tabloy/keygate/internal/payment/coupons"
+	"github.com/tabloy/keygate/internal/payment/hooks"
+	"github.com/tabloy/keygate/internal/payment/invoice"
 	"github.com/tabloy/keygate/internal/payment/provider"
 	"github.com/tabloy/keygate/internal/payment/providercfg"
 	"github.com/tabloy/keygate/internal/payment/providers/payos"
@@ -281,6 +285,9 @@ func main() {
 		5*time.Minute,
 	)
 	webhookSvc := service.NewWebhookService(db, logger, webhookHTTPTimeout, cfg.WebhookMaxAttempts, cfg.WebhookAllowPrivate)
+	// Phase 1b events: expiry, cancel and refund announce through the same
+	// dispatcher as the paid-order events.
+	orderEvents := service.NewOrderEventEmitter(webhookSvc, logger)
 	emailSvc := service.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername, cfg.SMTPPassword, cfg.SMTPFrom, logger, db)
 	emailSvc.SetBaseURL(cfg.BaseURL)
 	// LICENSE_SIGNING_KEY is a 32-byte ed25519 seed in hex. Parsed
@@ -460,6 +467,13 @@ func main() {
 		providerSvc = providercfg.NewService(db, paymentCodec, cfg.PaymentMode)
 	}
 	settleSvc := &settlement.Service{Store: db, Webhooks: webhookSvc, Log: logger}
+	// Phase 1b: every paid order gets an invoice. The service is itself a
+	// settlement.PaidHook; coupon redemption is appended to the same chain
+	// (hooks.Chain) once Module B lands, because settlement has one field.
+	invoiceSvc := invoice.New(db, releaseStorage, logger)
+	couponsSvc := coupons.New(db)
+	couponsSvc.Log = logger
+	settleSvc.PaidHook = hooks.Chain{invoiceSvc, couponsSvc}
 	paymentsWebhookH := &handler.PaymentsWebhookHandler{
 		Store: db, Config: providerSvc, Settlement: settleSvc, Log: logger,
 	}
@@ -500,11 +514,13 @@ func main() {
 	checkoutSvc := &checkout.Service{
 		Store: db, Config: providerSvc, Providers: providerFactory,
 		Webhooks: webhookSvc, Log: logger, BaseURL: cfg.BaseURL,
+		Coupons: couponsSvc, Settler: settleSvc,
 	}
-	paymentsAPIH := &handler.PaymentsAPIHandler{Checkout: checkoutSvc, Store: db}
+	paymentsAPIH := &handler.PaymentsAPIHandler{Checkout: checkoutSvc, Store: db, Events: orderEvents}
 	paymentsPublicH := &handler.PaymentsPublicHandler{Checkout: checkoutSvc, Store: db, Stripe: stripeH}
 	paymentsAdminH := &handler.PaymentsAdminHandler{
-		Store: db, Settlement: settleSvc, Config: providerSvc, Providers: providerFactory,
+		Events: orderEvents,
+		Store:  db, Settlement: settleSvc, Config: providerSvc, Providers: providerFactory,
 		// Registering the webhook is a PayOS client call, not an adapter
 		// method: ConfirmWebhook lives outside the Provider interface
 		// because no checkout path uses it. productID comes from the
@@ -523,10 +539,53 @@ func main() {
 		},
 		PublicBaseURL: cfg.BaseURL,
 	}
+	paymentsInvoicesH := &handler.InvoicesAdminHandler{Invoices: invoiceSvc}
+	paymentsReportsH := &handler.ReportsAdminHandler{Store: db}
+	consumerInvoiceH := &handler.ConsumerInvoiceHandler{Invoices: invoiceSvc, Store: db}
+	couponsAdminH := &handler.CouponsAdminHandler{Store: db, Checkout: checkoutSvc}
+	couponsPortalH := &handler.CouponsPortalHandler{Checkout: checkoutSvc}
+	// The portal's invoice surface reads module C through a thin adapter:
+	// its PDF returns the invoice too, which the portal does not need.
+	portalPayH := handler.NewPortalPaymentsHandler(db, checkoutSvc, handler.PortalInvoiceFuncs{
+		GetFn: invoiceSvc.Get,
+		PDFFn: func(ctx context.Context, id string) ([]byte, error) {
+			pdf, _, err := invoiceSvc.PDF(ctx, id)
+			return pdf, err
+		},
+		ListFn: func(ctx context.Context, f handler.PortalInvoiceFilter) ([]*model.Invoice, int, error) {
+			return invoiceSvc.List(ctx, invoice.ListFilter{
+				BuyerEmail: f.BuyerEmail,
+				Page:       store.Page{Limit: f.Limit, Offset: f.Offset},
+			})
+		},
+	})
+
 	expiryChecker := service.NewExpiryChecker(db, emailSvc, webhookSvc, logger)
+	// Phase 1b: the billing engine owns renewals, dunning and suspension
+	// for SePay/PayOS subscriptions. It needs ctx, which exists below, so
+	// it is built here and started next to the other long-lived loops.
+	billingSvc := billing.New(billing.Deps{
+		Store: db, Checkout: checkoutSvc, Email: emailSvc, Webhook: webhookSvc,
+		Logger: logger, BaseURL: cfg.BaseURL,
+	})
 	if cfg.StripeSecretKey != "" {
 		expiryChecker.EndPastDueUpgrade = stripeH.EndPastDueUpgrade
 		expiryChecker.EndGraceExpiredUpgrade = stripeH.EndGraceExpiredUpgrade
+	}
+	// The generic grace sweep runs before the billing pass and would
+	// expire a licence the engine is still holding in dunning; the
+	// engine's answer wins, and a licence it does not manage (or has
+	// closed) falls through to the Stripe hook and then the sweep.
+	prevGraceEnd := expiryChecker.EndGraceExpiredUpgrade
+	expiryChecker.EndGraceExpiredUpgrade = func(ctx context.Context, lic *model.License, cutoff time.Time) (bool, error) {
+		handled, err := billingSvc.EndGraceExpiredLicense(ctx, lic, cutoff)
+		if handled || err != nil {
+			return handled, err
+		}
+		if prevGraceEnd != nil {
+			return prevGraceEnd(ctx, lic, cutoff)
+		}
+		return false, nil
 	}
 	meteredSyncer := service.NewMeteredBillingSyncer(db, logger)
 	adminH := handler.NewAdminHandler(db, webhookSvc, emailSvc, expiryChecker, meteredSyncer)
@@ -617,12 +676,13 @@ func main() {
 	if providerSvc != nil {
 		rec := &reconcile.Worker{
 			Store: db, Config: providerSvc, Matcher: &reconcile.Matcher{Store: db},
-			Settlement: settleSvc, Log: logger,
+			Settlement: settleSvc, Log: logger, Events: orderEvents,
 		}
 		go rec.Run(ctx)
 	}
 
 	go expiryChecker.StartExpiryLoop(ctx)
+	go billingSvc.Run(ctx)
 
 	// Metered billing sync. 5-minute cadence — Stripe aggregates
 	// server-side so sub-minute polling burns rate budget for no
@@ -1039,6 +1099,7 @@ func main() {
 	// It is mounted at the spec root path and under /api/v1 (the SPA's
 	// api client prefixes it), sharing one rate-limit scope.
 	handler.RegisterPublicStatusRoutes(r, paymentsPublicH, cfg.RateLimitAPI)
+	handler.RegisterPublicQuoteRoutes(r, paymentsPublicH, cfg.RateLimitAPI)
 
 	// Consumer payments API. Every key is optionally bound to one product,
 	// and the handlers refuse anything outside it; create is the only
@@ -1057,6 +1118,7 @@ func main() {
 		payWrite.POST("/orders/:code/cancel", paymentsAPIH.Cancel)
 		payRead.GET("/orders/:code", paymentsAPIH.Get)
 		payRead.GET("/orders", paymentsAPIH.List)
+		handler.RegisterConsumerInvoiceRoutes(payRead, consumerInvoiceH)
 	}
 
 	// Self sign-up for free plans (/pay sends those plans to the form).
@@ -1076,6 +1138,8 @@ func main() {
 	portal := v1.Group("/portal", middleware.SessionAuth(cfg.JWTSecret, db.FindUserIsAdmin))
 	{
 		portal.GET("/me", authH.Me)
+		handler.RegisterPortalPaymentRoutes(portal, portalPayH)
+		handler.RegisterCouponsPortalRoutes(portal, couponsPortalH)
 		portal.GET("/licenses", func(c *gin.Context) {
 			emailVal, _ := c.Get("email")
 			emailStr, ok := emailVal.(string)
@@ -1337,6 +1401,9 @@ func main() {
 		// queue's raw payloads. Manual settlement, refunds and matches
 		// are money-moving audit events, not routine merchant calls.
 		admin.GET("/payments/orders", paymentsAdminH.ListOrders)
+		handler.RegisterInvoicesAdminRoutes(admin, paymentsInvoicesH)
+		handler.RegisterReportsAdminRoutes(admin, paymentsReportsH)
+		handler.RegisterCouponsAdminRoutes(admin, couponsAdminH)
 		admin.GET("/payments/orders/:code", paymentsAdminH.GetOrder)
 		admin.POST("/payments/orders/:code/mark-paid", paymentsAdminH.MarkPaid)
 		admin.POST("/payments/orders/:code/cancel", paymentsAdminH.CancelOrder)

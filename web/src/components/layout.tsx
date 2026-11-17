@@ -5,6 +5,7 @@ import {
   ChevronDown,
   CreditCard,
   FileKey2,
+  FileText,
   Heart,
   Key,
   Layers,
@@ -17,6 +18,8 @@ import {
   Rocket,
   ScrollText,
   Settings,
+  Tag,
+  Ticket,
   User,
   Users,
 } from "lucide-react"
@@ -72,6 +75,10 @@ export function AdminLayout() {
         { to: "/admin/payments/orders", label: t("admin.orders"), icon: Receipt },
         { to: "/admin/payments/unmatched", label: t("admin.unmatched"), icon: AlertCircle },
         { to: "/admin/payments/providers", label: t("admin.providers"), icon: CreditCard },
+        { to: "/admin/payments/coupons", label: t("nav.coupons"), icon: Tag },
+        { to: "/admin/payments/redemptions", label: t("nav.redemptions"), icon: Ticket },
+        { to: "/admin/payments/invoices", label: t("nav.invoices"), icon: FileText },
+        { to: "/admin/payments/reports", label: t("nav.reports"), icon: BarChart3 },
       ],
     },
     {
@@ -291,6 +298,9 @@ export function PortalLayout() {
 
   const portalNav = [
     { to: "/portal", label: t("nav.licenses"), icon: Key },
+    { to: "/portal/payments", label: t("nav.portalPayments"), icon: Receipt },
+    { to: "/portal/invoices", label: t("nav.invoices"), icon: FileText },
+    { to: "/portal/billing-profile", label: t("nav.billingProfile"), icon: CreditCard },
     { to: "/portal/account", label: t("nav.settings"), icon: User },
   ]
   const location = useLocation()

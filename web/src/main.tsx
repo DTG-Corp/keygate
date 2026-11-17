@@ -19,6 +19,12 @@ import LicensesPage from "@/pages/admin/licenses"
 import PaymentOrdersPage from "@/pages/admin/payment-orders"
 import PaymentProvidersPage from "@/pages/admin/payment-providers"
 import PaymentUnmatchedPage from "@/pages/admin/payment-unmatched"
+import PaymentCouponEditorPage from "@/pages/admin/payments-coupon-editor"
+import PaymentCouponsPage from "@/pages/admin/payments-coupons"
+import PaymentInvoiceDetailPage from "@/pages/admin/payments-invoice-detail"
+import PaymentInvoicesPage from "@/pages/admin/payments-invoices"
+import PaymentRedemptionsPage from "@/pages/admin/payments-redemptions"
+import PaymentReportsPage from "@/pages/admin/payments-reports"
 import PlanPricesPage from "@/pages/admin/plan-prices"
 import PlansPage from "@/pages/admin/plans"
 import ProductsPage from "@/pages/admin/products"
@@ -29,7 +35,12 @@ import CheckoutPayPage from "@/pages/checkout-pay"
 import CheckoutSuccessPage from "@/pages/checkout-success"
 import LoginPage from "@/pages/login"
 import PortalAccountPage from "@/pages/portal/account"
+import PortalBillingProfilePage from "@/pages/portal/billing-profile"
+import PortalInvoiceDetailPage from "@/pages/portal/invoice-detail"
+import PortalInvoicesPage from "@/pages/portal/invoices"
 import PortalLicensesPage from "@/pages/portal/licenses"
+import PortalPaymentDetailPage from "@/pages/portal/payment-detail"
+import PortalPaymentsPage from "@/pages/portal/payments"
 import SetupPage from "@/pages/setup"
 import SignupPage from "@/pages/signup"
 import "./index.css"
@@ -83,12 +94,24 @@ createRoot(document.getElementById("root")!).render(
                       <Route path="payments/providers" element={<PaymentProvidersPage />} />
                       <Route path="payments/orders" element={<PaymentOrdersPage />} />
                       <Route path="payments/unmatched" element={<PaymentUnmatchedPage />} />
+                      <Route path="payments/coupons" element={<PaymentCouponsPage />} />
+                      <Route path="payments/coupons/new" element={<PaymentCouponEditorPage />} />
+                      <Route path="payments/coupons/:id" element={<PaymentCouponEditorPage />} />
+                      <Route path="payments/redemptions" element={<PaymentRedemptionsPage />} />
+                      <Route path="payments/invoices" element={<PaymentInvoicesPage />} />
+                      <Route path="payments/invoices/:id" element={<PaymentInvoiceDetailPage />} />
+                      <Route path="payments/reports" element={<PaymentReportsPage />} />
                       <Route path="settings" element={<SettingsPage />} />
                     </Route>
 
                     {/* Portal */}
                     <Route path="/portal" element={<PortalLayout />}>
                       <Route index element={<PortalLicensesPage />} />
+                      <Route path="payments" element={<PortalPaymentsPage />} />
+                      <Route path="payments/:code" element={<PortalPaymentDetailPage />} />
+                      <Route path="invoices" element={<PortalInvoicesPage />} />
+                      <Route path="invoices/:id" element={<PortalInvoiceDetailPage />} />
+                      <Route path="billing-profile" element={<PortalBillingProfilePage />} />
                       <Route path="account" element={<PortalAccountPage />} />
                     </Route>
 

@@ -169,7 +169,8 @@ Use one key per intended order, including across network retries.
 
 Phase 1a ships two Vietnamese rails behind one API: **SePay** (a static
 VietQR by default; settlement comes from SePay's bank webhook) and
-**PayOS** (a hosted payment link). Amounts are integers in the
+**PayOS** (a hosted payment link). Phase 1b adds coupons, invoices,
+reports and the signed-in customer's payment portal on top of them. Amounts are integers in the
 currency's minor unit: `amount_minor`, `subtotal_minor`, `tax_minor`,
 `total_minor`. VND has exponent 0, so the integer is đồng. Phase 1a
 sells VND only.
@@ -182,18 +183,22 @@ checkout.
 
 ### Consumer API
 
-Every route needs an API key. `payments:write` reaches create and
-cancel; `payments:read` (or `payments:write`) reaches the two GETs.
-All four consumer routes share the `payments_api` rate-limit scope —
-`RATE_LIMIT_API` per minute per IP; a throttled call is `429`. A key
-bound to one product sees only that product's orders.
+Every route marked "key" needs an API key. `payments:write` reaches
+create and cancel; `payments:read` (or `payments:write`) reaches the
+GETs and invoice downloads. The quote is public but rate-limited. The
+order routes share the `payments_api` rate-limit scope —
+`RATE_LIMIT_API` per minute per IP; a throttled call is `429`. The quote
+uses `payments_public`. A key bound to one product sees only that
+product's orders and invoices.
 
-| Method | Path | Scope |
-|---|---|---|
-| `POST` | `/api/v1/payments/orders` | `payments:write` |
-| `GET` | `/api/v1/payments/orders` | `payments:read` or `payments:write` |
-| `GET` | `/api/v1/payments/orders/:code` | `payments:read` or `payments:write` |
-| `POST` | `/api/v1/payments/orders/:code/cancel` | `payments:write` |
+| Method | Path | Auth | Scope |
+|---|---|---|---|
+| `POST` | `/api/v1/payments/orders` | key | `payments:write` |
+| `GET` | `/api/v1/payments/orders` | key | `payments:read` or `payments:write` |
+| `GET` | `/api/v1/payments/orders/:code` | key | `payments:read` or `payments:write` |
+| `POST` | `/api/v1/payments/orders/:code/cancel` | key | `payments:write` |
+| `POST` | `/api/v1/payments/quote` | none | — |
+| `GET` | `/api/v1/payments/invoices/:id` | key | `payments:read` or `payments:write` |
 
 `POST /api/v1/payments/orders` body (the shipped shape; fields outside
 it are ignored, not rejected):
@@ -228,9 +233,22 @@ it are ignored, not rejected):
   falls back: an unknown, disabled or incomplete one is
   `503 PAYMENT_PROVIDER_DISABLED`, and a provider with no price for the
   plan is `422 PAYMENT_PRICE_NOT_CONFIGURED`.
-- `buyer` accepts exactly `name`, `email`, `phone`, `tax_id` and
-  `address`. PayOS receives the ones it supports; there is no
-  `company_name` or `request_invoice` in phase 1a.
+- `buyer` in phase 1a accepts `name`, `email`, `phone`, `tax_id` and
+  `address`. Phase 1b also accepts `company_name`, `tax_code` and
+  `request_invoice`; `tax_code` is the new spelling of `tax_id` and
+  both are accepted from old clients. `request_invoice=true` without a
+  tax code is `422 PAYMENT_TAX_CODE_REQUIRED`. PayOS receives the
+  fields it supports.
+- Phase 1b order create adds `coupon_codes[]` and
+  `ignore_invalid_coupons`. The caller cannot choose a `kind` in phase
+  1b: the consumer API creates `new` orders, `renewal` orders are created
+  by the billing engine, and prorated `upgrade` orders by
+  `billing.Service.CreateUpgradeOrder` (no public HTTP surface yet; the
+  portal upgrade route remains the Stripe-era one). The response adds
+  `discounts[]` (`code`, `type`, `amount_minor`) and priced
+  `subtotal_minor`/`discount_minor`/`tax_minor`/`total_minor`; an
+  upgrade order also carries `credit_minor` (prorated unused time on the
+  current plan).
 - `metadata` is stored on the order and never sent to the provider.
 - `Idempotency-Key` is honoured but optional (see **Idempotency**). A
   replay returns the first `201` with `Idempotent-Replayed: true`; the
@@ -319,11 +337,121 @@ canceled or refunded. Cancelling does not call the provider: SePay has
 nothing to cancel and the PayOS link simply expires.
 
 Order statuses: `pending`, `paid`, `expired`, `canceled`, `refunded`,
-`partially_refunded`. Attempt statuses are separate: `created`,
-`pending`, `succeeded`, `failed`, `expired`, `canceled` (`paid` is an
-order status and never an attempt status).
+`partially_refunded`. Attempt statuses are separate: `pending`,
+`succeeded`, `failed`, `expired` (`paid` is an order status and never
+an attempt status).
+
+#### Quote (phase 1b)
+
+`POST /api/v1/payments/quote` is the public dry run: it prices a plan
+with coupons and tax and creates **nothing** — no order, no attempt, no
+coupon redemption. It shares the `payments_public` bucket.
+
+```json
+{
+  "plan_id": "3f2a9c10-6b7e-4d21-9c55-0a1b2c3d4e5f",
+  "quantity": 1,
+  "email": "buyer@example.com",
+  "coupon_codes": ["TET2026"],
+  "ignore_invalid_coupons": false
+}
+```
+
+`data` is the priced total: `subtotal_minor`, `discount_minor`,
+`tax_minor`, `total_minor`, `currency`, `currency_exponent` and
+`discounts[]` (`code`, `type`, `amount_minor`). A rejected coupon is
+the matching `PAYMENT_COUPON_*` code; with `ignore_invalid_coupons`
+the code is dropped instead. The response also carries `currency`,
+`currency_exponent`, `billing_interval`, `trial_days` and `discounts[]`
+(`code`, `type`, `amount_minor`). It is mounted with the shared
+`payments_public` rate-limit bucket.
+
+#### Consumer invoices (phase 1b)
+
+`GET /api/v1/payments/invoices/:id` returns the invoice JSON; adding
+`?format=pdf` streams the stored PDF as a raw body
+(`application/pdf`, `Content-Disposition: attachment`). Ownership is
+the API key's product: an invoice whose order belongs to another
+product is `404 INVOICE_NOT_FOUND`, the same answer as an unknown id.
+The JSON carries `id`, `number`, `order_id`, `license_id`, `status`
+(`draft|issued|pending_issue|void`), the frozen `buyer` snapshot,
+`items[]` (`description`, `plan_id`, `quantity`, `unit_amount_minor`,
+`amount_minor`, `tax_rate_bp`), `subtotal_minor`, `discount_minor`,
+`tax_minor`, `total_minor`, `currency`, `currency_exponent`,
+`issued_at` and `created_at`. Issue/void rules are admin actions; a
+consumer or API-key read does not change the invoice.
+
+### Portal (session)
+
+`/api/v1/portal/*` is the signed-in customer's surface. It is **not**
+an API-key surface: `SessionAuth` authenticates the browser session
+and puts `user_id` and `email` on the request. Every route answers
+`401 UNAUTHORIZED` without that session. A customer only ever sees
+their own rows: an order or invoice belonging to somebody else is
+answered exactly like an unknown one (`404`), never `403`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/portal/payments/orders` | the customer's orders, newest first |
+| `GET` | `/api/v1/portal/payments/orders/:code` | one order and its current instruction |
+| `POST` | `/api/v1/portal/payments/orders/:code/pay` | re-issue the instruction for a pending order |
+| `POST` | `/api/v1/portal/payments/orders/:code/cancel` | cancel a pending order |
+| `GET` | `/api/v1/portal/invoices` | the customer's invoices |
+| `GET` | `/api/v1/portal/invoices/:id` | invoice JSON, or `?format=pdf` |
+| `GET` | `/api/v1/portal/billing-profile` | saved buyer/tax block |
+| `PUT` | `/api/v1/portal/billing-profile` | validate and upsert it |
+| `POST` | `/api/v1/portal/coupons/validate` | phase 1b coupon preview for the signed-in buyer |
+
+**Ownership.** An order belongs to the caller when the order email or
+the buyer snapshot's `email` equals the session email
+(case-insensitive). Phase 1a has no `external_customer_id` column on
+`payment_orders`; the buyer JSON is the second identity. An invoice
+belongs to the caller when its `buyer.email` matches, or when the
+order it was issued for belongs to them. A foreign code/id is
+`404 PAYMENT_ORDER_NOT_FOUND` / `404 INVOICE_NOT_FOUND`.
+
+**Orders.** The list is paginated (default 50, max 200) and returns
+`data.orders[]` — the same compact row the consumer list uses — plus
+`total`, `limit` and `offset`. The detail returns the consumer order
+projection (including `subtotal_minor`, `discount_minor`, `tax_minor`,
+`payment`) and no buyer blob or metadata. `payment` is absent when no
+attempt exists. `email` in a row is the order's email, which for a
+buyer-matched order may be the purchasing contact.
+
+`POST .../pay` refreshes the instruction for a **pending, unexpired**
+order only. It never re-prices and never creates a second order: the
+amount is the order's stored total. A paid, expired, canceled or
+refunded order is `409 PAYMENT_ORDER_NOT_PAYABLE` before any provider
+call. Provider failures reuse the vocabulary: `503
+PAYMENT_PROVIDER_DISABLED` and `502 PAYMENT_PROVIDER_ERROR`.
+`POST .../cancel` cancels a pending order (no provider call; SePay has
+nothing to cancel and the PayOS link is left to expire) and answers
+the canceled order. A second cancel or a paid order is `409
+PAYMENT_ORDER_NOT_PAYABLE`. Cancelling has no licence effect.
+
+**Invoices.** The list returns `data.invoices[]` with `id`, `number`,
+`order_id`, `status`, the money fields, `currency`,
+`currency_exponent`, `created_at` and `issued_at` when set — not the
+internal `pdf_path` or e-invoice refs. The detail adds the frozen
+`buyer` and `items[]`. `?format=pdf` is a raw PDF body with
+`Cache-Control: private, no-store`; a foreign or unknown id is `404`
+before the PDF is fetched, and any other `format` is `400
+BAD_REQUEST`.
+
+**Billing profile.** The row is one per user. `GET` answers
+`{"buyer": {}}` when nothing is saved, otherwise the stored block.
+`PUT` accepts either the flat object or `{"buyer": {...}}` with
+`name` (required, ≤ 200 characters), `company_name`, `tax_code`,
+`address`, `email`, `phone` and `request_invoice` (bool). Fields are
+trimmed; a missing/blank name or an over-long field is `400
+BAD_REQUEST`; `request_invoice=true` with an empty `tax_code` is `422
+PAYMENT_TAX_CODE_REQUIRED`. A successful PUT upserts and writes an
+audit row (`entity=customer_billing_profile`, actor `portal`); a
+rejected PUT writes nothing. This profile is what "request a VAT
+invoice" reads at checkout; it does not change an existing invoice.
 
 ### Public status and pay page
+
 
 | Method | Path | Auth |
 |---|---|---|
@@ -435,6 +563,43 @@ un-notified. The reconciliation worker is the backstop (below). There
 is **no source-IP allowlist** in phase 1a: the HMAC/apikey/checksum is
 the gate. The spec's SePay CIDR allowlist is deferred, and
 `allowed_cidrs` is not part of the config shape.
+
+### Outbound events
+
+Webhook subscriptions (`/admin/webhooks`) receive the install's existing
+`license.*`, `quota.*`, `seat.*`, `plan.*` and `release.*` events plus
+the payment and billing events below. Every delivery is
+`{"event": "...", "timestamp": "...", "data": {...}}` and is signed,
+retried, claimed and replayable by the existing webhook service; this
+section only fixes the `data` shape. Money fields are integer minor
+units.
+
+| Event | `data` |
+|---|---|
+| `order.created` | `order` (code, kind, provider, status, total, currency, expires_at, product_id, plan_id) |
+| `order.paid` | `order` + `license` (id, key_prefix, plan_id, valid_until) + `payment` (provider, provider_ref, paid_at) |
+| `order.expired` | `order` |
+| `order.canceled` | `order` |
+| `payment.succeeded` | `order` + `payment` (provider, amount, currency, reference, occurred_at) |
+| `payment.failed` | `order` + `payment` (failure_reason) |
+| `payment.refunded` | `order` + `refund` (amount, reason, method) |
+| `invoice.issued` | `invoice` (id, number, total, currency, pdf_url?) |
+| `invoice.voided` | `invoice` (id, number) |
+| `license.renewal_due` | `license` (id, key_prefix, valid_until) + `order` (code, total, expires_at) |
+
+`order.expired` and `order.canceled` fire at the transition, once: a
+sweep that finds no row, a cancel that loses the compare-and-set, or a
+retry of an already-terminal order emits nothing. `payment.refunded`
+fires once per refund row recorded, with the refund's amount in minor
+units and its `method` (`manual` in phase 1). Settlement writes these
+inside the same transition as the status change; there is still no
+outbox, so a consumer that missed a delivery reconciles against the
+order/invoice APIs, not a replay log.
+
+**Known phase-1b gap.** The settlement path records a provider-reported
+expiry (PayOS/SePay telling us the order lapsed) as `pending -> expired`
+without emitting `order.expired`; only the reconciliation sweep emits
+it. A consumer that missed an expiry reconciles against the order API.
 
 ### Admin: payments
 
@@ -592,6 +757,105 @@ in its `(provider, currency, billing_interval)` slot and retires the
 old one. `DELETE` deactivates one row and answers `204`; an unknown row
 or one that does not belong to the named plan is `404 PRICE_NOT_FOUND`.
 
+### Admin: coupons, invoices and reports (phase 1b)
+
+These routes sit on the same install-wide admin group as
+`/admin/payments` (`SessionOrAPIKey` + `RequireScope(admin)`); every
+write is audited. The shapes below are the merged handlers' shapes.
+
+**Coupons and redemptions**
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/admin/coupons` | list; filters `q`, `active`, `stack_group`, `scope_type`; paginated |
+| `POST` | `/api/v1/admin/coupons` | create, with inline `scopes[]` |
+| `POST` | `/api/v1/admin/coupons/preview` | dry-run price for a plan + codes; creates nothing |
+| `GET` | `/api/v1/admin/coupons/:id` | detail |
+| `PUT` | `/api/v1/admin/coupons/:id` | update; scopes replaced atomically |
+| `DELETE` | `/api/v1/admin/coupons/:id` | delete only with no redemptions; otherwise archive (`active=false`) |
+| `GET` | `/api/v1/admin/coupons/:id/redemptions` | one coupon's redemption history |
+| `GET` | `/api/v1/admin/payments/redemptions` | global history; filters `coupon`, `email`, `from`, `to`; `?format=csv` |
+
+A coupon carries `code`, `description`, `type` (`percent|fixed|trial`),
+`value` (basis points for `percent`, minor units for `fixed`),
+`trial_days`, `currency`, `active`, `valid_from`, `valid_to`,
+`max_redemptions` (0 = unlimited), `redeemed_count`,
+`per_customer_limit`, `stack_group` (`general|campaign|private`),
+`stackable`, `priority`, `assigned_email` and `scopes[]`
+(`{scope_type, scope_id}` with `scope_type` one of product/plan; an
+empty set covers every product).
+Delete with redemptions is `409`; the code is module-owned
+(**verify**). Redeeming a coupon is recorded once at settlement; the
+redemption row carries `coupon_id`, `order_id`, `email`, `amount_minor`
+and `created_at`. `?format=csv` is a raw `text/csv` body with a header
+row and the filtered rows; the filename is `redemptions-<date>.csv`.
+
+**Invoices**
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/admin/payments/invoices` | list; filters `status`, `number`, `license_id`, `order_id`, `product_id`, `from`, `to` |
+| `GET` | `/api/v1/admin/payments/invoices/:id` | one invoice with buyer/items |
+| `GET` | `/api/v1/admin/payments/invoices/:id/pdf` | stream the stored PDF |
+| `POST` | `/api/v1/admin/payments/invoices/:id/issue` | issue a draft / retry e-invoice |
+| `POST` | `/api/v1/admin/payments/invoices/:id/void` | void an issued invoice |
+
+Invoice statuses are `draft`, `issued`, `pending_issue` and `void`.
+`issue` on an already issued or void invoice is `409
+INVOICE_ALREADY_ISSUED`; `void` on a draft is the same conflict. When
+an e-invoice provider is configured but not wired, issuing moves the
+row to `pending_issue` and puts it on the operator's manual queue; a
+provider failure is `502 EINVOICE_PROVIDER_ERROR`. Issuing and voiding
+emit `invoice.issued` / `invoice.voided` once. A voided invoice keeps
+its number; numbers are never reused. PDFs are stored by the invoice
+service and served with `Cache-Control: private, no-store`; admin PDF
+download is admin-authenticated. **Verify after merge:** module C may
+name the detail/PDF routes differently; the list/issue/void paths above
+are the spec's.
+
+**Reports** (all `GET`, all accept `?format=csv`)
+
+| Path | Groups by |
+|---|---|
+| `/api/v1/admin/payments/reports/revenue` | `provider`, `plan`, `product`, `period` |
+| `/api/v1/admin/payments/reports/reconciliation` | day; settled vs provider-reported, with drift |
+| `/api/v1/admin/payments/reports/vat` | period; output VAT contained in paid totals |
+
+JSON rows use integer minor units and the same
+`currency`/`currency_exponent` pair as the ledger. CSV responses are a
+raw `text/csv` body (`Content-Disposition: attachment`), with a header
+row and one row per group. Columns:
+
+- revenue: `period, provider, plan_id, plan_name, product_id,
+  product_name, currency, currency_exponent, orders, subtotal_minor,
+  discount_minor, tax_minor, total_minor`
+- reconciliation: `day, provider, currency, orders_count,
+  transactions_count, orders_minor, transactions_minor, drift_minor`
+- VAT: `period, currency, currency_exponent, tax_rate_bp, orders,
+  taxable_base_minor, tax_minor, total_minor`
+
+Revenue includes paid and partially refunded orders net of recorded
+refunds; reconciliation reports unmatched/amount-mismatch counts and the
+drift between the ledger and provider totals; VAT reports the tax
+component, not a second tax charge.
+
+**Settings used by phase 1b** (admin settings API; values are strings)
+
+| Key | Meaning |
+|---|---|
+| `coupon_max_stack` | max amount coupons per order (default 2) |
+| — | the public quote shares the install's API rate-limit bucket (`RATE_LIMIT_API`); the spec's separate `payment_quote_rate_limit` key is not read in phase 1b |
+| `invoice_seller_name`, `invoice_seller_tax_code`, `invoice_seller_address`, `invoice_seller_email` | seller block printed on invoices |
+| `invoice_note` | footer note printed on invoices |
+| `einvoice_provider` | `""` (PDF only) or a configured e-invoice provider key |
+
+Unset or blank invoice-seller values render as empty lines, not
+`<nil>`; `einvoice_provider` blank is the normal PDF-only mode. The
+renewal/dunning worker's cadence is not a settings key; its reminder
+steps (`renewal_reminder_7/3/1`, `renewal_due`, `renewal_grace_1/3/7`,
+`renewal_suspended`) are dispatched by the billing worker and use the
+plan's `grace_days` and the licence's `valid_until`.
+
 ### Payment error vocabulary
 
 Every code below arrives with exactly this status; the contract test
@@ -631,55 +895,77 @@ envelope codes (`BAD_REQUEST` 400, `NOT_FOUND` 404, `INTERNAL_ERROR`
 | `PAYMENT_PROVIDER_ERROR` | 502 |
 | `PAYMENT_PROVIDER_DISABLED` | 503 |
 
-### Phase-1a drift as shipped
+Phase 1b adds the following. Some are documented ahead of their
+handler and are not emitted until the owning module merges; the module
+that writes one pins it in `paymentVocabulary`. The two this module
+emits — `PAYMENT_TAX_CODE_REQUIRED` and `INVOICE_NOT_FOUND` — are
+already pinned. Treat the table as the target vocabulary for the merge.
+
+| Code | Status |
+|---|---|
+| `PAYMENT_SIGNATURE_INVALID` | 400 |
+| `PAYMENT_TAX_CODE_REQUIRED` | 422 |
+| `PAYMENT_AMOUNT_MISMATCH` | 422 |
+| `PAYMENT_CURRENCY_UNSUPPORTED` | 422 |
+| `PAYMENT_COUPON_INVALID` | 422 |
+| `PAYMENT_COUPON_STACK_LIMIT` | 422 |
+| `PAYMENT_COUPON_GROUP_CONFLICT` | 422 |
+| `PAYMENT_COUPON_NOT_STACKABLE` | 422 |
+| `PAYMENT_COUPON_TRIAL_MIXED` | 422 |
+| `PAYMENT_COUPON_ASSIGNED` | 422 |
+| `PAYMENT_COUPON_EXHAUSTED` | 409 |
+| `INVOICE_NOT_FOUND` | 404 |
+| `INVOICE_ALREADY_ISSUED` | 409 |
+| `EINVOICE_PROVIDER_ERROR` | 502 |
+
+`PAYMENT_PRICE_NOT_CONFIGURED` remains `422` even though the design
+spec's table says `409`; the shipped code and this contract win.
+
+### As shipped: phase 1a and 1b
 
 The design spec describes a larger phase 1
 ([`2026-11-12-sepay-payos-integration-design.md`](superpowers/specs/2026-11-12-sepay-payos-integration-design.md)).
-These are the places the shipped rail is intentionally narrower; code
-and this contract are the source of truth.
+These are the places the shipped code is intentionally narrower or
+different; code and this contract are the source of truth.
 
-- **Four webhook events, not ten.** Only `order.created`, `order.paid`,
-  `payment.succeeded` and `payment.failed` are emitted. There is no
-  `order.expired`, `order.canceled`, `payment.refunded`,
-  `invoice.*` or `license.renewal_due` yet.
+- **No outbox.** Payment and billing events are dispatched synchronously
+  from the transition that writes them, through the existing webhook
+  service. A consumer that missed one reconciles against the order,
+  invoice or status APIs; `payment_events` records raw provider
+  deliveries for operators, not a replay log.
 - **`payment.succeeded.amount` is an integer in minor units.** VND has
   exponent 0, so it is đồng — not a decimal string and not a float.
   `payment.failure_reason` is derived server-side from the normalised
   status (`failed`/`partial`/`voided`), not copied from the provider's
   free-text `desc`.
-- **No outbox.** Events are dispatched synchronously at settlement
-  through the existing webhook service; a consumer that missed one must
-  reconcile against `GET /api/v1/payments/orders/:code` or the status
-  endpoint. There is no replay log for payment events beyond
-  `payment_events` (raw provider deliveries, admin-visible).
-- **`POST /api/v1/payments/quote` is deferred.** It is not registered
-  at all and answers the ordinary `404 NOT_FOUND`; phase 1a has no
-  coupon pricing to preview.
-- **No coupons, invoices or portal payments.** `coupon_codes`,
-  `discounts[]`, invoice JSON/PDF and portal order/invoice pages are
-  absent; `discount_minor` is always 0. The coupon tables exist only for
-  a later phase.
+- **Coupons, invoices, reports and the portal are phase 1b.** The
+  consumer quote, consumer invoice read, portal orders/invoices/billing
+  profile, admin coupon and redemption surfaces, admin invoice issue/void
+  and the three reports are registered by the phase-1b wiring; see the
+  sections above. `discount_minor` is 0 only when no coupon applied.
+  The shapes above match the merged handlers: quote returns
+  `subtotal_minor`/`discount_minor`/`tax_minor`/`total_minor`,
+  `currency`/`currency_exponent`, `billing_interval`, `trial_days` and
+  `discounts[]`; report CSV columns are listed in the reports section.
+- **The billing worker and dunning ladder are phase 1b.** Renewal
+  reminders and `license.renewal_due` are dispatched by that worker on
+  the plan's `grace_days` and the licence's `valid_until`; the
+  `invoice_*` and `einvoice_provider` settings keys are listed above.
+  Its cadence is one pass per hour; reminder rungs are 7/3/1 days before
+  the period end, dunning rungs 1/3/7 days after it, and a suspended
+  licence gets one suspension notice.
 - **SePay CIDR allowlist deferred.** There is no source-IP check in
-  phase 1a; HMAC/apikey (and PayOS's checksum) is the gate. The
-  `payment_default_provider`, `payment_order_ttl_minutes`,
-  `payment_return_base_url` and `payment_webhook_base_url` settings are
-  writable through the admin settings API. `payment_return_base_url` is
-  accepted but not yet read by a create path (PayOS return/cancel URLs
-  come from `BASE_URL`).
+  phase 1a/1b; HMAC/apikey (and PayOS's checksum) is the gate.
 - **PayOS confirm-webhook is explicit, and PayOS has no sandbox.** The
   admin action registers the URL only after the install is public
   HTTPS; PayOS probes immediately. Test with a real small payment, or
-  mark a `test`-mode order paid manually. The optional spec §5.2 buyer
-  fields `company_name` and `request_invoice` are not accepted; only
-  `name`, `email`, `phone`, `tax_id`, `address` are.
-- **SePay hosted-gateway checkout creation is deferred to phase 1b.**
-  Phase 1a creates only the static VietQR: `CreateAttempt` has no
-  `RedirectURL`/`FormHTML` path, and Keygate never redirects a buyer to
-  SePay's gateway. The IPN route, `X-Secret-Key` verification and
-  settlement are live, so an existing external gateway integration can
-  still notify `/api/v1/webhook/sepay-ipn`. The `ipn_secret` credential
-  and the `payment_return_base_url` setting are accepted but are not
-  used to create a gateway checkout.
+  mark a `test`-mode order paid manually.
+- **SePay hosted-gateway checkout creation is deferred.** Phase 1a
+  creates only the static VietQR and phase 1b does not change that:
+  `CreateAttempt` has no redirect/form path, and Keygate never redirects
+  a buyer to SePay's gateway. The IPN route, `X-Secret-Key`
+  verification and settlement are live, so an existing external gateway
+  integration can still notify `/api/v1/webhook/sepay-ipn`.
 - **Admin actor attribution is NULL for API-key admins.**
   `payment_refunds.created_by` and `payment_transactions.matched_by`
   reference `users(id)`, so an `apikey:<id>` principal is stored as
@@ -688,17 +974,34 @@ and this contract are the source of truth.
 - **Refunds are manual-only and do not revoke licences.** The operator
   returns the money outside the system and records the row; `method`
   other than `manual` is refused. The order becomes
-  `refunded`/`partially_refunded`, the licence is untouched.
+  `refunded`/`partially_refunded`, the licence is untouched, and one
+  `payment.refunded` event is emitted per recorded refund.
 - **Public status field names are flat.** `amount_minor`, not
   `amount` or `total`; `bank` holds the account object; there is no
-  `paid_at`, `qr_payload` or `va_number`. Consumer order responses use
-  `subtotal_minor`/`tax_minor`/`total_minor` and nest the instruction
-  under `payment`.
+  `paid_at`, `qr_payload` or `va_number`. Consumer and portal order
+  responses use `subtotal_minor`/`tax_minor`/`total_minor` and nest the
+  instruction under `payment`.
 - **Quantity is required and capped at 100.** There is no implicit
   quantity of 1; `0` is `400 INVALID_QUANTITY`.
 - **Idempotency mismatch is 422, not 409.** `IDEMPOTENCY_KEY_CONFLICT`
   is the existing middleware answer; the plan's "409" is stale. The
-  header itself is optional on create.
+  header itself is optional on create, required by no consumer route.
+- **Portal ownership uses email, not an external customer id.**
+  `payment_orders` has no `external_customer_id` column in phase 1a;
+  the session email must match the order email or the buyer JSON's
+  `email`. An invoice is matched by its buyer email or its order's.
+  The spec's `external_customer_id` filters are not implemented on the
+  portal routes.
+- **Provider-reported expiry does not emit `order.expired`.** Only the
+  reconciliation sweep does; settlement is outside this module. This is
+  the one event gap to close before relying on expiry webhooks.
+
+**Verify after merge.** The phase-1b modules were built in parallel
+worktrees. Reconcile these against the merged handlers before treating
+them as frozen: quote response keys and rounding; `discounts[]`
+element fields; admin coupon/report response columns; admin invoice
+list filters and PDF route; billing-worker settings defaults; and the
+portal coupon-validate route (it is module B's, not this module's).
 
 ## Retrying
 

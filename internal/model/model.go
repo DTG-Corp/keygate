@@ -273,6 +273,12 @@ type Plan struct {
 	CheckoutID      string `bun:",unique,notnull" json:"checkout_id"`
 	LicenseType     string `bun:",notnull" json:"license_type"`
 	BillingInterval string `json:"billing_interval,omitempty"`
+	// ProrationMode is how an upgrade charges the switch: 'immediate'
+	// credits the unused days at order creation and charges the
+	// difference now; 'next_cycle' records the change and leaves the
+	// money to the next renewal order (spec §3.6). Only meaningful for
+	// subscription plans.
+	ProrationMode string `bun:",notnull,default:'immediate'" json:"proration_mode"`
 	// IMPORTANT: do NOT add bun `default:N` annotations here. Bun
 	// translates a zero Go value on a `default:N` field into SQL
 	// DEFAULT — which means a deliberate `0` from the handler ends up
@@ -1134,12 +1140,20 @@ const (
 
 	// Payment events (phase 1a, spec §11). These are the only four the
 	// VN rails emit: an order was opened, an order was paid, and the
-	// provider-side payment succeeded or failed. The expired/canceled/
-	// refunded order events belong to phase 1b.
+	// provider-side payment succeeded or failed.
 	EventOrderCreated     = "order.created"
 	EventOrderPaid        = "order.paid"
 	EventPaymentSucceeded = "payment.succeeded"
 	EventPaymentFailed    = "payment.failed"
+
+	// Payment events (phase 1b, spec §3.10/§8): the rest of the order
+	// lifecycle, refunds, invoices and the renewal reminder.
+	EventOrderExpired        = "order.expired"
+	EventOrderCanceled       = "order.canceled"
+	EventPaymentRefunded     = "payment.refunded"
+	EventInvoiceIssued       = "invoice.issued"
+	EventInvoiceVoided       = "invoice.voided"
+	EventLicenseRenewalDue   = "license.renewal_due"
 )
 
 // WebhookEvents is every event a webhook can subscribe to. Delivery
@@ -1154,6 +1168,8 @@ var WebhookEvents = []string{
 	EventLicenseQuantityChanged, EventQuotaWarning, EventQuotaExceeded,
 	EventSeatAdded, EventSeatRemoved, EventPlanChanged, EventReleasePublished, EventReleaseYanked, EventReleaseUnyanked,
 	EventOrderCreated, EventOrderPaid, EventPaymentSucceeded, EventPaymentFailed,
+	EventOrderExpired, EventOrderCanceled, EventPaymentRefunded,
+	EventInvoiceIssued, EventInvoiceVoided, EventLicenseRenewalDue,
 }
 
 // IsValidWebhookEvent reports whether e is in WebhookEvents.

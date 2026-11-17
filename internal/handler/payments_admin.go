@@ -21,6 +21,7 @@ import (
 	"github.com/tabloy/keygate/internal/payment/provider"
 	"github.com/tabloy/keygate/internal/payment/providercfg"
 	"github.com/tabloy/keygate/internal/payment/settlement"
+	"github.com/tabloy/keygate/internal/service"
 	"github.com/tabloy/keygate/internal/store"
 	"github.com/tabloy/keygate/pkg/response"
 )
@@ -48,6 +49,9 @@ type PaymentsAdminHandler struct {
 	// PayOS webhook URL when the payment_webhook_base_url setting is not
 	// set.
 	PublicBaseURL string
+	// Events announces order/payment transitions. Optional; a nil emitter
+	// is a no-op so a server built without webhooks still works.
+	Events *service.OrderEventEmitter
 }
 
 // ─── views ───
@@ -287,6 +291,7 @@ func (h *PaymentsAdminHandler) CancelOrder(c *gin.Context) {
 		return
 	}
 	h.audit(c, order, "canceled", map[string]any{"status": order.Status})
+	h.Events.OrderCanceled(c, order)
 	response.OK(c, gin.H{"order": adminOrderViewOf(order, false)})
 }
 
@@ -355,6 +360,7 @@ func (h *PaymentsAdminHandler) RefundOrder(c *gin.Context) {
 		"refund_id": refund.ID, "amount_minor": refund.AmountMinor,
 		"method": refund.Method, "status": reloaded.Status, "actor": adminID(c),
 	})
+	h.Events.PaymentRefunded(c, reloaded, refund)
 	response.OK(c, gin.H{"refund": refund, "order": adminOrderViewOf(reloaded, false)})
 }
 

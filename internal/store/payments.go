@@ -73,20 +73,27 @@ type CreateOrderInput struct {
 	Quantity                                int
 	SubtotalMinor, DiscountMinor            int64
 	TaxMinor, TotalMinor                    int64
-	Currency                                string
-	CurrencyExponent                        int16
-	TaxRateBP                               int
-	Provider                                string
-	ExpiresAt                               time.Time
-	Buyer, Metadata                         []byte
-	CreatedByKeyID                          string
+	// CreditMinor is the unused-time credit an immediate plan upgrade
+	// takes off the order. It is stored on the order so a later reader
+	// (settlement, invoice, operator) never re-derives it.
+	CreditMinor      int64
+	Currency         string
+	CurrencyExponent int16
+	TaxRateBP        int
+	Provider         string
+	ExpiresAt        time.Time
+	Buyer, Metadata  []byte
+	CreatedByKeyID   string
 	// LicenseID and PeriodEnd place a renewal order against the licence it
 	// extends. payment_orders_renewal_once allows one pending renewal per
 	// (license_id, period_end), so a caller retrying a renewal must see
 	// that collision as its own answer, not as a code-allocation retry.
-	LicenseID string
-	PeriodEnd *time.Time
-	Discounts []OrderDiscount
+	// PeriodStart is the other end of that period: settlement extends the
+	// licence by exactly period_start..period_end.
+	LicenseID   string
+	PeriodStart *time.Time
+	PeriodEnd   *time.Time
+	Discounts   []OrderDiscount
 }
 
 // orderCode generates a code; a package var so a test can force a
@@ -133,6 +140,8 @@ func validateCreateOrderInput(in CreateOrderInput) error {
 		return fmt.Errorf("%w: currency is required", ErrOrderInvalidInput)
 	case in.SubtotalMinor < 0, in.DiscountMinor < 0, in.TaxMinor < 0, in.TotalMinor < 0:
 		return fmt.Errorf("%w: amounts must not be negative", ErrOrderInvalidInput)
+	case in.CreditMinor < 0:
+		return fmt.Errorf("%w: credit_minor must not be negative", ErrOrderInvalidInput)
 	case in.TaxRateBP < 0:
 		return fmt.Errorf("%w: tax_rate_bp must not be negative", ErrOrderInvalidInput)
 	}
@@ -164,11 +173,11 @@ func (s *Store) CreatePaymentOrder(ctx context.Context, in CreateOrderInput) (*m
 			ID: NewID(), Code: orderCode(), ProductID: in.ProductID, PlanID: in.PlanID,
 			PriceID: in.PriceID, Email: in.Email, Kind: in.Kind, Quantity: in.Quantity,
 			SubtotalMinor: in.SubtotalMinor, DiscountMinor: in.DiscountMinor,
-			TaxMinor: in.TaxMinor, TotalMinor: in.TotalMinor,
+			TaxMinor: in.TaxMinor, TotalMinor: in.TotalMinor, CreditMinor: in.CreditMinor,
 			Currency: in.Currency, CurrencyExp: in.CurrencyExponent, TaxRateBP: in.TaxRateBP,
 			Provider: in.Provider, Status: domain.OrderPending, ExpiresAt: in.ExpiresAt,
 			Buyer: buyer, Metadata: metadata, CreatedByKeyID: in.CreatedByKeyID,
-			LicenseID: in.LicenseID, PeriodEnd: in.PeriodEnd,
+			LicenseID: in.LicenseID, PeriodStart: in.PeriodStart, PeriodEnd: in.PeriodEnd,
 			CreatedAt: time.Now(), UpdatedAt: time.Now(),
 		}
 		err := RunInTx(ctx, s.DB, func(ctx context.Context, tx bun.Tx) error {
@@ -343,19 +352,35 @@ func (s *Store) CancelPaymentOrder(ctx context.Context, code string) (*model.Pay
 }
 
 // ExpirePaymentOrders moves every pending order whose expires_at has
-// passed to expired, and reports how many it moved. Only pending rows
-// are touched: a paid order keeps its status even if its expiry is in the
-// past, which is what lets a late bank transfer be recorded rather than
-// treated as unpaid.
+// passed to expired, and reports how many it moved. It is the count-only
+// spelling of ExpirePaymentOrdersWithRows for callers that do not need
+// the rows.
 func (s *Store) ExpirePaymentOrders(ctx context.Context, now time.Time) (int, error) {
-	res, err := s.DB.NewUpdate().Model((*model.PaymentOrder)(nil)).
-		Set("status = ?", domain.OrderExpired).Set("updated_at = ?", now).
-		Where("status = ?", domain.OrderPending).Where("expires_at < ?", now).Exec(ctx)
+	rows, err := s.ExpirePaymentOrdersWithRows(ctx, now)
 	if err != nil {
 		return 0, err
 	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
+	return len(rows), nil
+}
+
+// ExpirePaymentOrdersWithRows moves every pending order whose expires_at
+// has passed to expired and returns the rows it moved, so the caller can
+// announce each transition. Only pending rows are touched: a paid order
+// keeps its status even if its expiry is in the past, which is what lets
+// a late bank transfer be recorded rather than treated as unpaid. The
+// two callers share one statement, so a row can never be counted by the
+// old path and missed by the event path.
+func (s *Store) ExpirePaymentOrdersWithRows(ctx context.Context, now time.Time) ([]*model.PaymentOrder, error) {
+	var rows []*model.PaymentOrder
+	err := s.DB.NewRaw(
+		`UPDATE payment_orders SET status = ?, updated_at = ?
+		 WHERE status = ? AND expires_at < ? RETURNING *`,
+		domain.OrderExpired, now, domain.OrderPending, now,
+	).Scan(ctx, &rows)
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 // CreatePaymentAttempt writes one provider instruction for an order,
