@@ -16,7 +16,7 @@ Pages are thin, data comes only through typed helpers in `web/src/lib/api.ts`; m
 only through `lib/money.ts` (integer minor units + exponent); dates through `lib/utils.ts`. New
 pages reuse `DataTable`, `Card`, `Select`, `Dialog`/`Sheet` and the existing navy DTG palette.
 Blob routes (invoice PDF, report/redemption CSV) go through `api.ts` fetch helpers, never raw
-`fetch` in a page. The AGPL "Powered by Keygate" footer/sidebar attribution is untouched.
+`fetch` in a page. The AGPL "Powered by DSoft" footer/sidebar attribution is untouched.
 
 **Spec:** `docs/superpowers/specs/2026-11-12-sepay-payos-integration-design.md` §3.9, §3.13, §4.8,
 §4.9, §6.2–§6.5, §8. **Contract:** `2026-11-17-sepay-payos-phase-1b-CONTRACT.md`. Module plans:

@@ -29,7 +29,7 @@ exponent; VN placement is `Asia/Ho_Chi_Minh`; new paths never call Stripe.
 
 ## Global Constraints
 
-- AGPL v3 §7(b): "Powered by Keygate" / `X-Powered-By` attribution remains on every surface.
+- AGPL v3 §7(b): "Powered by DSoft" / `X-Powered-By` attribution remains on every surface.
 - Money = integer minor units + exponent; VND exponent 0; no floats.
 - One error code ⇔ one HTTP status (`payments_contract_test.go` + `docs/api-contract.md`).
 - Admin writes are audited; every new public/admin/portal route has an auth + ownership test.

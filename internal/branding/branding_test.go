@@ -7,16 +7,16 @@ import (
 )
 
 func TestBrandingValues(t *testing.T) {
-	if branding.Project != "Keygate" {
+	if branding.Project != "DSoft" {
 		t.Errorf("Project = %q", branding.Project)
 	}
-	if branding.Domain != "keygate.app" {
+	if branding.Domain != "dtgsoft.vn" {
 		t.Errorf("Domain = %q", branding.Domain)
 	}
-	if branding.URL != "https://keygate.app" {
+	if branding.URL != "https://github.com/dtg-corp/dsoft" {
 		t.Errorf("URL = %q", branding.URL)
 	}
-	if branding.Tagline != "Powered by Keygate" {
+	if branding.Tagline != "Powered by DSoft" {
 		t.Errorf("Tagline = %q", branding.Tagline)
 	}
 }

@@ -23,7 +23,7 @@
 
 Non-negotiable constraints carried from the existing project:
 
-- AGPLv3 §7(b) attribution ("Powered by Keygate", `attribution_text`/`attribution_url`,
+- AGPLv3 §7(b) attribution ("Powered by DSoft", `attribution_text`/`attribution_url`,
   `X-Powered-By`) must not be removed or altered by any new UI or API surface.
 - Stripe files, routes and data are untouched in phase 1: no Stripe API calls are added, no
   Stripe prices are read or written, and the existing Stripe test suite must stay green.
@@ -376,7 +376,7 @@ Reconciliation is a first-class subsystem, not a fallback.
   (`invoice_counters` row locked with `UPDATE … RETURNING`).
 - Invoice content: seller block (from branding settings), buyer block (from order.buyer),
   line items (plan name, quantity, unit price, VAT rate), subtotal, discount, VAT, total, and a
-  note "Powered by Keygate" footer where the template shows it (attribution must remain).
+  note "Powered by DSoft" footer where the template shows it (attribution must remain).
 - PDF generation: server-side from an HTML template, stored in object storage
   (`invoices/<year>/<number>.pdf`) when storage is configured, otherwise generated on demand
   and streamed. The concrete PDF library is chosen in the implementation plan; it must not add
@@ -534,7 +534,7 @@ The frontend is React 19 + Vite + react-router-dom 7 + TanStack Query + Tailwind
 - Portal → orders (pay/renew), invoices (download), billing profile (buyer/tax details).
 - Pricing displays read `plan_prices` (local-first), with VND formatting and VAT note.
 
-Attribution surfaces (footer, "Powered by Keygate", `X-Powered-By`) remain untouched on every
+Attribution surfaces (footer, "Powered by DSoft", `X-Powered-By`) remain untouched on every
 new page.
 
 ---

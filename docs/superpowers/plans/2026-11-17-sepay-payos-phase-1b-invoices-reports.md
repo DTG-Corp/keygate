@@ -53,7 +53,7 @@ PDF, e-invoice seam), §4.8 (`invoices`, `invoice_counters`), §6.2 (consumer in
   (`time.FixedZone("ICT", 7*3600)`), matching the 1a provider adapters.
 - **Attribution (AGPL v3 §7(b)):** the PDF footer uses `branding.Tagline` + `branding.URL`
   (overridable by the `attribution_url` setting only when the installer set it explicitly); the
-  literal "Powered by Keygate" is never written in this module and is never removable.
+  literal "Powered by DSoft" is never written in this module and is never removable.
 - **No new infra:** no headless browser, no external PDF service, no vendor e-invoice API. The
   only new dependency is the PDF library plus the vendored OFL font.
 - Admin writes are audited through `store.Audit` (`ActorType: "admin"`, actor from the route).
@@ -327,7 +327,7 @@ func renderInvoicePDF(d pdfDocument) ([]byte, error)
 
 Layout: seller block, title (HÓA ĐƠN / INVOICE), number + issue date (VN time), buyer block,
 items table (description, qty, unit, amount), totals (subtotal, discount, VAT, total with
-exponent-aware formatting), payment reference/order code, note, "Powered by Keygate" footer
+exponent-aware formatting), payment reference/order code, note, "Powered by DSoft" footer
 linked to the attribution URL. Labels switch to Vietnamese when the `language` setting is `vi`.
 
 `PDF` logic: load invoice (404 sentinel) + order; if `pdf_path != ""` and storage enabled, `Get`

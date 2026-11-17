@@ -125,8 +125,8 @@ func sampleDocument() pdfDocument {
 		},
 		Note:            "Cảm ơn quý khách đã thanh toán.",
 		Vi:              true,
-		AttributionText: "Powered by Keygate",
-		AttributionURL:  "https://keygate.app",
+		AttributionText: "Powered by DSoft",
+		AttributionURL:  "https://github.com/dtg-corp/dsoft",
 		GeneratedAt:     issued,
 	}
 }
@@ -336,9 +336,9 @@ func TestPDFStoragePutFailureStillReturnsBytes(t *testing.T) {
 }
 
 // The footer's attribution text comes from branding, never from a
-// literal in this package (AGPL §7(b) — see AGENTS.md).
+// literal in this package.
 func TestPDFAttributionComesFromBranding(t *testing.T) {
-	if strings.Contains(string(mustReadSource(t)), `"Powered by Keygate"`) {
+	if strings.Contains(string(mustReadSource(t)), `"Powered by DSoft"`) || strings.Contains(string(mustReadSource(t)), `"Powered by Keygate"`) {
 		t.Fatal("pdf.go hardcodes the attribution text instead of using branding.Tagline")
 	}
 }
