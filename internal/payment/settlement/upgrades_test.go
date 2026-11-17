@@ -82,7 +82,9 @@ func upgradeOrder(t *testing.T, s *store.Store, prod *model.Product, target *mod
 	t.Helper()
 	start := time.Now().UTC().Truncate(time.Second)
 	order, err := s.CreatePaymentOrder(context.Background(), store.CreateOrderInput{
-		ProductID: prod.ID, PlanID: target.ID, LicenseID: lic.ID, Email: lic.Email,
+		// Deliberately no LicenseID: the upgrade row names the licence and
+		// settlement stamps the order with it.
+		ProductID: prod.ID, PlanID: target.ID, Email: lic.Email,
 		Kind: "upgrade", Quantity: 1, SubtotalMinor: 2_000_000, DiscountMinor: 800_000,
 		CreditMinor: 800_000, TotalMinor: 1_200_000, Currency: "VND", Provider: "sepay",
 		ExpiresAt: time.Now().Add(time.Hour), Buyer: []byte(`{}`), Metadata: []byte(`{}`),

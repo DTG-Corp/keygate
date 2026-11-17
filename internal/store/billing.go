@@ -449,16 +449,32 @@ func (s *Store) ApplyUpgradeFromOrderIn(ctx context.Context, db bun.IDB, order *
 	if order.Kind != "upgrade" {
 		return nil, fmt.Errorf("%w: order %s is a %s order", ErrUpgradeInvalid, order.Code, order.Kind)
 	}
-	if order.LicenseID == "" {
-		return nil, fmt.Errorf("%w: order %s names no licence", ErrUpgradeInvalid, order.Code)
-	}
 	if plan.ID != order.PlanID {
 		return nil, fmt.Errorf("%w: order %s is for plan %s, not %s", ErrUpgradeInvalid, order.Code, order.PlanID, plan.ID)
 	}
-	lic := new(model.License)
-	if err := db.NewSelect().Model(lic).Where("id = ?", order.LicenseID).For("UPDATE").Scan(ctx); err != nil {
+	// An upgrade order opened by checkout names its licence, but the
+	// upgrade row is the authority: settlement must still work for a
+	// row-first order whose license_id is not stamped yet.
+	first := new(model.LicenseUpgrade)
+	if err := db.NewSelect().Model(first).Where("payment_order_id = ?", order.ID).
+		Limit(1).Scan(ctx); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("%w: licence %s not found", ErrUpgradeIneligible, order.LicenseID)
+			return nil, fmt.Errorf("%w: order %s pays for no plan change", ErrUpgradeInvalid, order.ID)
+		}
+		return nil, fmt.Errorf("find upgrade by payment order: %w", err)
+	}
+	if first.LicenseID == "" || (order.LicenseID != "" && order.LicenseID != first.LicenseID) {
+		return nil, fmt.Errorf("%w: upgrade %s does not name licence %s", ErrUpgradeInvalid, first.ID, order.LicenseID)
+	}
+	// The licence is locked before the upgrade row is re-read FOR UPDATE.
+	// A renewal settlement takes the licence first and then the next-cycle
+	// row; taking the two in the same order here keeps the two settlements
+	// from deadlocking on a licence that is being renewed and upgraded at
+	// once.
+	lic := new(model.License)
+	if err := db.NewSelect().Model(lic).Where("id = ?", first.LicenseID).For("UPDATE").Scan(ctx); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: licence %s not found", ErrUpgradeIneligible, first.LicenseID)
 		}
 		return nil, err
 	}
@@ -468,6 +484,9 @@ func (s *Store) ApplyUpgradeFromOrderIn(ctx context.Context, db bun.IDB, order *
 	up, err := s.FindUpgradeByPaymentOrderIn(ctx, db, order.ID)
 	if err != nil {
 		return nil, err
+	}
+	if up.LicenseID != lic.ID {
+		return nil, fmt.Errorf("%w: upgrade %s is not for licence %s", ErrUpgradeInvalid, up.ID, lic.ID)
 	}
 	if up.State == model.UpgradeApplied {
 		return up, nil

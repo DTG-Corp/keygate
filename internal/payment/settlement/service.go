@@ -337,29 +337,12 @@ func (s *Service) settleUpgrade(ctx context.Context, order *model.PaymentOrder, 
 		if domain.IsOrderTerminal(locked.Status) {
 			return store.ErrOrderNotPayable
 		}
-		if locked.LicenseID == "" {
-			return fmt.Errorf("%w: order %s names no licence", store.ErrUpgradeInvalid, locked.Code)
-		}
-		// Lock the licence before the upgrade row. A renewal settlement
-		// takes the licence first and then the next-cycle row; taking the
-		// two in the same order here keeps the two settlements from
-		// deadlocking on a licence that is being renewed and upgraded at
-		// once.
-		var held model.License
-		if err := tx.NewSelect().Model(&held).Where("id = ?", locked.LicenseID).For("UPDATE").Scan(ctx); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("%w: licence %s not found", store.ErrUpgradeIneligible, locked.LicenseID)
-			}
-			return err
-		}
-		upgrade, err = s.Store.FindUpgradeByPaymentOrderIn(ctx, tx, locked.ID)
-		if err != nil {
-			return err
-		}
+		// The upgrade row names the licence; an order opened before the
+		// row was stamped gets its license_id set below.
 		if upgrade, err = s.Store.ApplyUpgradeFromOrderIn(ctx, tx, locked, plan); err != nil {
 			return err
 		}
-		granted, err = s.Store.FindLicenseByIDIn(ctx, tx, locked.LicenseID)
+		granted, err = s.Store.FindLicenseByIDIn(ctx, tx, upgrade.LicenseID)
 		if err != nil {
 			return err
 		}
