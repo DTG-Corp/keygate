@@ -266,7 +266,9 @@ func (s *Store) MarkInvoiceIssued(ctx context.Context, id string, at time.Time, 
 	res, err := s.DB.NewUpdate().Model((*model.Invoice)(nil)).
 		Set("status = ?", model.InvoiceStatusIssued).
 		Set("issued_at = ?", at.UTC()).
-		Set("e_invoice_provider = ?", ref.Provider).
+		// A manual issue leaves ref empty but must not erase the provider
+		// the invoice was queued for: the seam stays visible on the row.
+		Set("e_invoice_provider = COALESCE(NULLIF(?, ''), e_invoice_provider)", ref.Provider).
 		Set("e_invoice_ref = ?", ref.Ref).
 		Set("e_invoice_status = ?", ref.Status).
 		Set("updated_at = ?", time.Now().UTC()).
