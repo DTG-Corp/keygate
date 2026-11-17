@@ -496,40 +496,52 @@ func (s *Store) RedeemCouponsForOrder(ctx context.Context, in []RedemptionInput)
 	}
 	return RunInTx(ctx, s.DB, func(ctx context.Context, tx bun.Tx) error {
 		for _, r := range in {
-			if r.CouponID != "" {
-				// Serialise the counter read-modify-write per coupon. The
-				// row is read FOR UPDATE so two settlements of different
-				// orders cannot lose an increment.
-				if _, err := tx.NewSelect().Model((*model.Coupon)(nil)).
-					Column("id").Where("id = ?", r.CouponID).For("UPDATE").Exec(ctx); err != nil {
-					return err
-				}
-			}
-			row := &model.CouponRedemption{
-				ID: NewID(), CouponID: r.CouponID, CouponCode: r.CouponCode, OrderID: r.OrderID,
-				Email:              strings.ToLower(strings.TrimSpace(r.Email)),
-				ExternalCustomerID: strings.TrimSpace(r.ExternalCustomerID),
-				Type:               r.Type, AmountMinor: r.AmountMinor, TrialDays: r.TrialDays,
-				CreatedAt: time.Now(),
-			}
-			res, err := tx.NewInsert().Model(row).On("CONFLICT (order_id, coupon_code) DO NOTHING").Exec(ctx)
-			if err != nil {
-				return err
-			}
-			n, err := res.RowsAffected()
-			if err != nil {
-				return err
-			}
-			if n == 0 || r.CouponID == "" {
-				continue
-			}
-			if _, err := tx.NewUpdate().Model((*model.Coupon)(nil)).
-				Set("redeemed_count = redeemed_count + 1").Where("id = ?", r.CouponID).Exec(ctx); err != nil {
+			if err := redeemCouponIn(ctx, tx, r); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+// redeemCouponIn records one redemption and bumps its counter. A coupon
+// deleted between quote and settlement has no row to count against; the
+// order's discount snapshot remains the evidence, so the redemption is
+// skipped rather than failing a paid order.
+func redeemCouponIn(ctx context.Context, tx bun.Tx, in RedemptionInput) error {
+	if strings.TrimSpace(in.CouponID) == "" {
+		return nil
+	}
+	// Lock the counter row first: two settlements of different orders
+	// using the same coupon must not lose an increment, and a coupon that
+	// is gone must not reach the insert (its FK would abort the whole
+	// paid hook).
+	var locked string
+	err := tx.NewRaw("SELECT id FROM coupons WHERE id = ? FOR UPDATE", in.CouponID).Scan(ctx, &locked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var inserted string
+	err = tx.NewRaw(`INSERT INTO coupon_redemptions
+			(id, coupon_id, coupon_code, order_id, email, external_customer_id,
+			 type, amount_minor, trial_days, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+		ON CONFLICT (order_id, coupon_code) DO NOTHING
+		RETURNING id`,
+		NewID(), in.CouponID, NormaliseCouponCode(in.CouponCode), in.OrderID,
+		strings.ToLower(strings.TrimSpace(in.Email)), strings.TrimSpace(in.ExternalCustomerID),
+		in.Type, in.AmountMinor, in.TrialDays).Scan(ctx, &inserted)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // already recorded by an earlier delivery
+	}
+	if err != nil {
+		return err
+	}
+	_, err = tx.NewRaw("UPDATE coupons SET redeemed_count = redeemed_count + 1, updated_at = now() WHERE id = ?", in.CouponID).Exec(ctx)
+	return err
 }
 
 // CouponRedemptionStats is the per-coupon counter block.
@@ -560,7 +572,8 @@ func (s *Store) CountCouponRedemptionsFor(ctx context.Context, couponID, email, 
 	if external := strings.TrimSpace(externalID); external != "" {
 		q = q.Where("external_customer_id = ?", external)
 	} else {
-		q = q.Where("external_customer_id = '' AND email = ?", strings.ToLower(strings.TrimSpace(email)))
+		q = q.Where("external_customer_id = ''").
+			Where("lower(email) = ?", strings.ToLower(strings.TrimSpace(email)))
 	}
 	return q.Count(ctx)
 }
@@ -603,13 +616,14 @@ func (f RedemptionFilter) apply(q *bun.SelectQuery) *bun.SelectQuery {
 		q = q.Where("r.coupon_code = ?", NormaliseCouponCode(f.CouponCode))
 	}
 	if f.Email != "" {
-		q = q.Where("r.email = ?", strings.ToLower(strings.TrimSpace(f.Email)))
+		q = q.Where("lower(r.email) = ?", strings.ToLower(strings.TrimSpace(f.Email)))
 	}
 	if f.From != nil {
 		q = q.Where("r.created_at >= ?", *f.From)
 	}
 	if f.To != nil {
-		q = q.Where("r.created_at <= ?", *f.To)
+		// Exclusive upper bound, so consecutive days do not overlap.
+		q = q.Where("r.created_at < ?", *f.To)
 	}
 	return q
 }
@@ -618,24 +632,23 @@ func (f RedemptionFilter) apply(q *bun.SelectQuery) *bun.SelectQuery {
 func (s *Store) redemptionSelect() *bun.SelectQuery {
 	return s.DB.NewSelect().
 		TableExpr("coupon_redemptions AS r").
-		Join("JOIN payment_orders AS o ON o.id = r.order_id").
+		Join("LEFT JOIN payment_orders AS o ON o.id = r.order_id").
 		ColumnExpr("r.id, r.coupon_id, r.coupon_code, r.order_id, r.email, " +
 			"r.external_customer_id, r.type, r.amount_minor, r.trial_days, r.created_at").
-		ColumnExpr("o.code AS order_code, o.currency AS currency, o.currency_exponent AS currency_exponent")
+		ColumnExpr("COALESCE(o.code, '') AS order_code, COALESCE(o.currency, '') AS currency, " +
+			"COALESCE(o.currency_exponent, 0) AS currency_exponent")
 }
 
 // ListRedemptions returns one page of the redemption history, newest
 // first.
 func (s *Store) ListRedemptions(ctx context.Context, f RedemptionFilter) ([]RedemptionRow, int, error) {
 	out := make([]RedemptionRow, 0)
+	total, err := f.apply(s.DB.NewSelect().TableExpr("coupon_redemptions AS r")).Count(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
 	q := f.apply(s.redemptionSelect())
-	total := 0
 	if f.Page.Limit > 0 {
-		n, err := q.Clone().Count(ctx)
-		if err != nil {
-			return nil, 0, err
-		}
-		total = n
 		q = q.Limit(f.Page.Limit)
 	}
 	if f.Page.Offset > 0 {
