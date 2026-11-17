@@ -364,7 +364,9 @@ func (r *rig) subscription(licenseID string) *model.Subscription {
 }
 
 type queuedMail struct {
-	To, Subject, Body string
+	To      string `bun:"to_addr"`
+	Subject string `bun:"subject"`
+	Body    string `bun:"body"`
 }
 
 func (r *rig) queued(to string) []queuedMail {
