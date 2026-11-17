@@ -508,3 +508,75 @@ func TestReinstateLicenseForRenewalInLiftsOnlyBillingSuspension(t *testing.T) {
 		t.Fatalf("licence = %s by %q", again.Status, again.SuspendedBy)
 	}
 }
+
+// A trial's period runs past its trial end, so a scan keyed on the period
+// would only see it after the conversion window had closed. The trial end
+// has to be its own window.
+func TestListBillingSubscriptionsIncludesDueTrials(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	due := seedBillingFixture(t, s, billingOpts{
+		Start: now, End: now.Add(30 * 24 * time.Hour),
+		Licence: model.StatusTrialing, Sub: model.StatusTrialing,
+	})
+	trialEnd := now.Add(3 * 24 * time.Hour)
+	if _, err := s.DB.NewRaw(`UPDATE subscriptions SET trial_end = ? WHERE license_id = ?`,
+		trialEnd, due.Licence.ID).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	later := seedBillingFixture(t, s, billingOpts{
+		Start: now, End: now.Add(30 * 24 * time.Hour),
+		Licence: model.StatusTrialing, Sub: model.StatusTrialing,
+	})
+	if _, err := s.DB.NewRaw(`UPDATE subscriptions SET trial_end = ? WHERE license_id = ?`,
+		now.Add(20*24*time.Hour), later.Licence.ID).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	subs, err := s.ListBillingSubscriptions(ctx, now, 7*24*time.Hour)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, sub := range subs {
+		seen[sub.LicenseID] = true
+	}
+	if !seen[due.Licence.ID] {
+		t.Fatal("a trial ending inside the window was not scanned")
+	}
+	if seen[later.Licence.ID] {
+		t.Fatal("a trial ending after the window was scanned")
+	}
+}
+
+func TestHasPaidTrialConversion(t *testing.T) {
+	s := testdb.Store(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	f := seedBillingFixture(t, s, billingOpts{End: now.Add(time.Hour)})
+
+	paid, err := s.HasPaidTrialConversion(ctx, f.Licence.ID)
+	if err != nil || paid {
+		t.Fatalf("paid = %v, err = %v before any order", paid, err)
+	}
+	order, err := s.CreatePaymentOrder(ctx, store.CreateOrderInput{
+		ProductID: f.Product.ID, PlanID: f.Plan.ID, Email: f.Licence.Email,
+		Kind: "new", Quantity: 1, SubtotalMinor: 100_000, TotalMinor: 100_000,
+		Currency: "VND", CurrencyExponent: 0, Provider: "sepay", ExpiresAt: now.Add(time.Hour),
+		Metadata: []byte(`{"billing":{"source":"trial_conversion","trial_license_id":"` + f.Licence.ID + `"}}`),
+	})
+	if err != nil {
+		t.Fatalf("create order: %v", err)
+	}
+	if paid, err := s.HasPaidTrialConversion(ctx, f.Licence.ID); err != nil || paid {
+		t.Fatalf("a pending order counted as paid: %v, %v", paid, err)
+	}
+	if _, err := s.DB.NewRaw(`UPDATE payment_orders SET status = ? WHERE id = ?`,
+		domain.OrderPaid, order.ID).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if paid, err := s.HasPaidTrialConversion(ctx, f.Licence.ID); err != nil || !paid {
+		t.Fatalf("paid = %v, err = %v after settlement", paid, err)
+	}
+}

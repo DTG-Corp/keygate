@@ -46,7 +46,9 @@ const billingNewestPerLicence = `subscription.id = (
 // manages whose current period ends within lead, plus the licences this
 // engine suspended, whose period-end is long past but whose expiry has no
 // other writer (the generic grace sweep only looks at active and
-// past_due rows).
+// past_due rows). A trial is scanned on its trial end, not on the period
+// end: the paid period it converts into ends a month later, long after the
+// conversion window.
 //
 // Only VN-billed subscriptions are returned: a Stripe subscription is
 // Stripe's to renew, and phase 1b must never touch it.
@@ -68,10 +70,12 @@ func (s *Store) ListBillingSubscriptions(ctx context.Context, now time.Time, lea
 			model.StatusActive, model.StatusTrialing, model.StatusPastDue,
 			model.StatusSuspended, BillingSuspendedBy).
 		Where(`subscription.current_period_end <= ?
+			OR (subscription.status = ? AND subscription.trial_end <= ?)
 			OR EXISTS (SELECT 1 FROM licenses l
 			            WHERE l.id = subscription.license_id
 			              AND l.status = ? AND l.suspended_by = ?)`,
-			now.Add(lead), model.StatusSuspended, BillingSuspendedBy).
+			now.Add(lead), model.StatusTrialing, now.Add(lead),
+			model.StatusSuspended, BillingSuspendedBy).
 		OrderExpr("subscription.current_period_end ASC, subscription.id ASC").
 		Scan(ctx)
 	if err != nil {
@@ -98,6 +102,23 @@ func (s *Store) GetBillingSubscription(ctx context.Context, licenseID string) (*
 		return nil, fmt.Errorf("get billing subscription: %w", err)
 	}
 	return sub, nil
+}
+
+// HasPaidTrialConversion reports whether a paid order already converted
+// this trial. A trial-conversion order is kind new (spec §3.4), so it
+// cannot name the trial licence in license_id; the metadata does instead,
+// and it is the only record that the trial has been paid for.
+func (s *Store) HasPaidTrialConversion(ctx context.Context, licenseID string) (bool, error) {
+	var paid bool
+	err := s.DB.NewRaw(`SELECT EXISTS (
+		SELECT 1 FROM payment_orders
+		 WHERE kind = ? AND status = ?
+		   AND metadata -> 'billing' ->> 'trial_license_id' = ?
+	)`, "new", domain.OrderPaid, licenseID).Scan(ctx, &paid)
+	if err != nil {
+		return false, fmt.Errorf("has paid trial conversion: %w", err)
+	}
+	return paid, nil
 }
 
 // FindOpenRenewalOrderForPeriod returns the renewal order that already

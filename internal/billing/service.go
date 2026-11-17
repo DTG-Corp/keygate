@@ -179,8 +179,15 @@ func (s *Service) process(ctx context.Context, sub *model.Subscription, now time
 	switch {
 	case sub.CancelAtPeriodEnd:
 		return s.endCanceled(ctx, sub, lic, now)
-	case sub.Status == model.StatusTrialing && sub.TrialEnd != nil && now.Before(sub.TrialEnd.UTC()):
-		return s.convertTrial(ctx, sub, lic, now)
+	case sub.Status == model.StatusTrialing && sub.TrialEnd != nil:
+		if now.Before(sub.TrialEnd.UTC()) {
+			return s.convertTrial(ctx, sub, lic, now)
+		}
+		// An ended trial belongs to the platform's fallback sweep: it
+		// moves the licence onto trial_fallback_plan_id, or expires it
+		// when there is none. Dunning it here would take that decision
+		// away, so the engine stops at the trial end.
+		return nil
 	case now.Before(end):
 		if err := s.ensureRenewalOrder(ctx, sub, lic, now); err != nil {
 			return err

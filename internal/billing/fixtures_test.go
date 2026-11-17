@@ -102,6 +102,7 @@ type seeded struct {
 
 type seedOpts struct {
 	Interval      string // default month
+	LicenceType   string // default subscription
 	GraceDays     int    // default 7
 	RenewalDays   int
 	TrialDays     int
@@ -124,6 +125,9 @@ func (r *rig) seed(opts seedOpts) *seeded {
 	ctx := context.Background()
 	if opts.Interval == "" {
 		opts.Interval = "month"
+	}
+	if opts.LicenceType == "" {
+		opts.LicenceType = "subscription"
 	}
 	if opts.Provider == "" {
 		opts.Provider = "sepay"
@@ -150,7 +154,7 @@ func (r *rig) seed(opts seedOpts) *seeded {
 	}
 	plan := &model.Plan{
 		ProductID: prod.ID, Name: "Pro", Slug: "pro-" + suffix,
-		LicenseType: "subscription", BillingInterval: opts.Interval, LicenseModel: "standard",
+		LicenseType: opts.LicenceType, BillingInterval: opts.Interval, LicenseModel: "standard",
 		Active: true, GraceDays: opts.GraceDays, RenewalDays: opts.RenewalDays,
 		TrialDays: opts.TrialDays, MaxActivations: 5,
 	}
