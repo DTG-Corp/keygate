@@ -94,11 +94,11 @@ func (s *Service) markPastDueAndMail(ctx context.Context, sub *model.Subscriptio
 // rungs start at one day late.
 func graceRung(daysLate int) int {
 	switch {
-	case daysLate <= 1:
+	case daysLate <= graceRungOne:
 		return 0
-	case daysLate < 3:
+	case daysLate < graceRungMid:
 		return 1
-	case daysLate < 7:
+	case daysLate < graceRungMax:
 		return 3
 	default:
 		return 7

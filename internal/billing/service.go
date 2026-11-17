@@ -348,8 +348,8 @@ func holdDuration(plan *model.Plan) time.Duration {
 	return intervalDuration(plan.BillingInterval)
 }
 
-// ceilDays is the whole number of days until t, rounded up: 23h30m is one
-// day left, and exactly 0 is zero days left.
+// ceilClock is the whole number of days from now until t, rounded up:
+// 23h30m is one day left, and a t that is not after now is zero.
 func ceilClock(now, t time.Time) int {
 	if !t.After(now) {
 		return 0
