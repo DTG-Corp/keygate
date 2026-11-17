@@ -2,11 +2,13 @@ package billing
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/tabloy/keygate/internal/model"
+	"github.com/tabloy/keygate/internal/payment/domain"
 	"github.com/tabloy/keygate/internal/store"
 )
 
@@ -38,6 +40,20 @@ func (s *Service) sendReminders(ctx context.Context, sub *model.Subscription, li
 	}
 	if fresh == nil || fresh.CurrentPeriodEnd == nil || !fresh.CurrentPeriodEnd.Equal(end) ||
 		(fresh.Status != model.StatusActive && fresh.Status != model.StatusPastDue) {
+		return nil
+	}
+	// The mail tells the customer to pay, so there has to be something
+	// to pay: an unpaid renewal order covering this period. An unpriced
+	// plan is an operator's missing row, not a reason to mail a dead
+	// link.
+	order, err := s.deps.Store.FindOpenRenewalOrderForPeriod(ctx, lic.ID, end)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if order.Status != domain.OrderPending {
 		return nil
 	}
 	daysLeft := ceilClock(now, end)

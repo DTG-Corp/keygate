@@ -139,21 +139,19 @@ func TestReminderNewPeriodRestartsTheLadder(t *testing.T) {
 func TestReminderSkipsRenewedSinceScan(t *testing.T) {
 	r := newRig(t)
 	f := r.seed(seedOpts{End: r.now.Add(3 * 24 * time.Hour), Price: 250_000})
+	// Wrap the real checkout: the order is genuine, then the "payment"
+	// lands while the pass is still running, before the mail step.
 	next := r.now.Add(33 * 24 * time.Hour)
-	r.useCheckout(&fakeOrders{fn: func(in checkout.CreateOrderInput) (*checkout.OrderResult, error) {
+	r.useCheckout(&payDuringPass{inner: r.checkout, after: func(in checkout.CreateOrderInput) {
+		ctx := context.Background()
 		if _, err := r.s.DB.NewRaw(`UPDATE subscriptions SET current_period_start = ?, current_period_end = ? WHERE license_id = ?`,
-			in.PeriodEnd, next, in.LicenseID).Exec(context.Background()); err != nil {
+			in.PeriodEnd, next, in.LicenseID).Exec(ctx); err != nil {
 			t.Errorf("move period: %v", err)
 		}
-		if _, err := r.s.DB.NewRaw(`UPDATE licenses SET valid_until = ? WHERE id = ?`,
-			next, in.LicenseID).Exec(context.Background()); err != nil {
+		if _, err := r.s.DB.NewRaw(`UPDATE licenses SET valid_until = ?, status = ? WHERE id = ?`,
+			next, model.StatusActive, in.LicenseID).Exec(ctx); err != nil {
 			t.Errorf("extend licence: %v", err)
 		}
-		return &checkout.OrderResult{Order: &model.PaymentOrder{
-			ID: "ord_" + f.Licence.ID, Code: "KGRENEW1", Kind: in.Kind,
-			LicenseID: in.LicenseID, PlanID: in.PlanID, TotalMinor: 250_000,
-			PeriodStart: in.PeriodStart, PeriodEnd: in.PeriodEnd,
-		}, Created: true}, nil
 	}})
 
 	if err := r.run(); err != nil {
@@ -168,6 +166,21 @@ func TestReminderSkipsRenewedSinceScan(t *testing.T) {
 	if tags := r.notificationTags(f.Licence.ID); len(tags) != 0 {
 		t.Fatalf("reminder tags = %v", tags)
 	}
+}
+
+// payDuringPass settles the order inside the pass that created it: the
+// stale-scan simulation.
+type payDuringPass struct {
+	inner billing.OrderCreator
+	after func(in checkout.CreateOrderInput)
+}
+
+func (p *payDuringPass) CreateOrder(ctx context.Context, in checkout.CreateOrderInput) (*checkout.OrderResult, error) {
+	res, err := p.inner.CreateOrder(ctx, in)
+	if err == nil && res != nil && res.Created && p.after != nil {
+		p.after(in)
+	}
+	return res, err
 }
 
 // An unconfigured mailer means no ladder, not a panic.

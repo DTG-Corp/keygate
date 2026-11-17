@@ -1671,6 +1671,18 @@ const notBillingRailSQL = `NOT EXISTS (
 	  AND bs.payment_provider IN ('sepay', 'payos')
 )`
 
+// graceExpiryRailSQL is the narrow form for the grace sweep. A VN
+// subscription the engine has already closed (cancel-at-period-end, a
+// lapsed trial) is no longer in the engine's scan, so the platform sweep
+// must still expire its licence. Only the subscriptions the engine
+// actively drives are excluded here.
+const graceExpiryRailSQL = `NOT EXISTS (
+	SELECT 1 FROM subscriptions bs
+	WHERE bs.license_id = license.id
+	  AND bs.payment_provider IN ('sepay', 'payos')
+	  AND bs.status IN ('active', 'trialing', 'past_due')
+)`
+
 // FindLicensesForGraceExpiry returns active/past_due licenses that have passed valid_until.
 func (s *Store) FindLicensesForGraceExpiry(ctx context.Context) ([]*model.License, error) {
 	var out []*model.License
@@ -1679,7 +1691,7 @@ func (s *Store) FindLicensesForGraceExpiry(ctx context.Context) ([]*model.Licens
 		Where("license.status IN ('active', 'past_due')").
 		Where("license.valid_until IS NOT NULL").
 		Where("license.valid_until < ?", time.Now()).
-		Where(notBillingRailSQL).
+		Where(graceExpiryRailSQL).
 		Scan(ctx)
 	return out, err
 }
