@@ -10,7 +10,7 @@ import (
 	"hash/fnv"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 	"github.com/uptrace/bun"
 )
 

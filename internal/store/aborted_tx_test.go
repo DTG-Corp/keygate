@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/store"
 	"github.com/uptrace/bun"
 )
 

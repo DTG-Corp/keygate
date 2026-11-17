@@ -135,14 +135,14 @@ A `200` with any other body counts as a failed delivery.
 
 ### 1.3 Hosted-gateway IPN (optional)
 
-If a SePay **hosted gateway** order exists outside Keygate, configure its
+If a SePay **hosted gateway** order exists outside DSoft, configure its
 IPN URL as `{BASE_URL}/api/v1/webhook/sepay-ipn` and set the same secret
 in `credentials.ipn_secret`; the route checks `X-Secret-Key` in constant
 time and acks with `200` and an empty body.
 
 Phase 1a does **not** create hosted-gateway checkouts; that is deferred
 to phase **1b**. The static QR is the only SePay instruction the API
-creates; Keygate does not redirect buyers to SePay's gateway, and the
+creates; DSoft does not redirect buyers to SePay's gateway, and the
 config/settings fields are accepted but unused for create. The IPN
 route is live so an externally created gateway order can still settle.
 
@@ -429,7 +429,7 @@ curl -sS -X POST \
   -d '{"amount_minor":1190000,"reason":"customer request","method":"manual"}' | jq
 ```
 
-The operator returns the money outside Keygate. The order becomes
+The operator returns the money outside DSoft. The order becomes
 `refunded` (full) or `partially_refunded`; the licence is **not**
 revoked. Revoke or shorten the licence separately if the business
 decision is to do so.

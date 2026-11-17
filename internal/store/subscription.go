@@ -8,7 +8,7 @@ import (
 
 	"github.com/uptrace/bun"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // SyncLicenseSubscriptionIn keeps a licence's subscription row in step

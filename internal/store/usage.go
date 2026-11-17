@@ -7,7 +7,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 func (s *Store) RecordUsageEvent(ctx context.Context, e *model.UsageEvent) error {

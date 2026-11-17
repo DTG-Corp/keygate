@@ -12,7 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/breaker"
+	"github.com/dtg-corp/dsoft/internal/breaker"
 )
 
 // RateLimitBackend abstracts the rate limiting storage.

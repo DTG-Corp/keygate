@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: Keygate API
+  title: DSoft API
   description: |
     License management API for software products.
 
@@ -199,8 +199,8 @@ info:
     integrators. `/api/v1/setup/*` serves the first-run setup wizard.
   version: 1.3.0
   contact:
-    name: Keygate
-    url: https://keygate.app
+    name: DSoft
+    url: https://github.com/dtg-corp/dsoft
   license:
     name: AGPL v3
     url: https://www.gnu.org/licenses/agpl-3.0.html
@@ -210,7 +210,7 @@ servers:
     variables:
       server:
         default: http://localhost:9000
-        description: Your Keygate server URL
+        description: Your DSoft server URL
 
 # Public SDK endpoints have no auth at the route layer. Portal and
 # admin operations declare their own security.
@@ -266,7 +266,7 @@ tags:
       Payment ledger, reconciliation queue and provider configuration.
       Requires the `admin` scope or an admin session.
   - name: Webhooks
-    description: Events Keygate posts to your webhook endpoints
+    description: Events DSoft posts to your webhook endpoints
 
 paths:
   /config:
@@ -332,8 +332,8 @@ paths:
                       version: { type: string }
                       commit: { type: string }
                       build_date: { type: string }
-                      project: { type: string, example: Keygate }
-                      project_url: { type: string, example: "https://keygate.app" }
+                      project: { type: string, example: DSoft }
+                      project_url: { type: string, example: "https://github.com/dtg-corp/dsoft" }
 
   /license/pubkey:
     get:
@@ -1200,7 +1200,7 @@ paths:
         - name: platform
           in: path
           required: true
-          description: Keygate platform, such as windows-x64 or darwin-arm64
+          description: DSoft platform, such as windows-x64 or darwin-arm64
           schema:
             type: string
         - name: file
@@ -1366,7 +1366,7 @@ paths:
         variables:
           server:
             default: http://localhost:9000
-            description: Your Keygate server URL
+            description: Your DSoft server URL
     get:
       tags: [Checkout]
       summary: Hosted checkout link for a plan (root path)
@@ -5446,7 +5446,7 @@ paths:
       description: |
         Requires the `admin` scope. Creates a new delivery with the same
         event and payload (including the original `timestamp`) and a new
-        `X-Keygate-Delivery` id, and sends it in the background with the
+        `X-DSoft-Delivery` id, and sends it in the background with the
         usual retries. No request body.
       x-required-scopes: [admin]
       security:
@@ -5875,7 +5875,7 @@ paths:
 
         Phase 1a does not create hosted-gateway checkouts (deferred to
         phase 1b), but this route settles an order created outside
-        Keygate; Keygate never redirects a buyer to SePay's gateway.
+        DSoft; DSoft never redirects a buyer to SePay's gateway.
         Failures mirror the bank webhook: `401 PAYMENT_WEBHOOK_UNAUTHORIZED`
         (enveloped), and bare `400`, `403`, `413`, `500`, `503`.
       operationId: sepayGatewayIPN
@@ -6859,7 +6859,7 @@ paths:
           $ref: "#/components/responses/RateLimited"
 
 webhooks:
-  # Every event Keygate posts. Each delivery is a POST of
+  # Every event DSoft posts. Each delivery is a POST of
   # application/json with the WebhookPayload envelope; see the
   # WebhookPayload schema for headers, signing and retries.
   license.created:
@@ -7541,7 +7541,7 @@ webhooks:
                       type: object
                       properties:
                         webhook_id: { type: string, format: uuid }
-                        message: { type: string, example: "This is a test delivery from Keygate." }
+                        message: { type: string, example: "This is a test delivery from DSoft." }
       responses:
         "200":
           $ref: "#/components/responses/WebhookAck"
@@ -7700,13 +7700,13 @@ components:
       schema: { type: integer, default: 0, minimum: 0 }
     WebhookEventHeader:
       in: header
-      name: X-Keygate-Event
+      name: X-DSoft-Event
       required: true
       description: The event name, as in the payload's `event`
       schema: { type: string }
     WebhookSignatureHeader:
       in: header
-      name: X-Keygate-Signature
+      name: X-DSoft-Signature
       required: true
       description: |
         `sha256=` followed by the hex HMAC-SHA256 of the raw request body,
@@ -7716,7 +7716,7 @@ components:
       schema: { type: string, example: "sha256=5d41402abc4b2a76b9719d911017c592..." }
     WebhookDeliveryHeader:
       in: header
-      name: X-Keygate-Delivery
+      name: X-DSoft-Delivery
       required: true
       description: The delivery id. Retries of a delivery keep it; a manual resend gets a new one.
       schema: { type: string, format: uuid }
@@ -7913,8 +7913,8 @@ components:
       type: object
       description: Server identification sent with activate and verify answers.
       properties:
-        server: { type: string, example: Keygate }
-        url: { type: string, example: "https://keygate.app" }
+        server: { type: string, example: DSoft }
+        url: { type: string, example: "https://github.com/dtg-corp/dsoft" }
 
     ActivateResponse:
       type: object
@@ -8491,8 +8491,8 @@ components:
         to each active endpoint of the event's product that subscribes to
         the event (exact name match).
 
-        Headers: `X-Keygate-Event` (the event), `X-Keygate-Delivery` (the
-        delivery id) and `X-Keygate-Signature: sha256=<hex>`, the
+        Headers: `X-DSoft-Event` (the event), `X-DSoft-Delivery` (the
+        delivery id) and `X-DSoft-Signature: sha256=<hex>`, the
         HMAC-SHA256 of the raw body keyed with the endpoint's secret. The
         signature covers the body only; check `timestamp` yourself if you
         want to refuse old deliveries.
@@ -8506,7 +8506,7 @@ components:
         it is marked `failed`. Redirects are followed up to 10 hops,
         each checked against the private address rules. Deliveries are
         sent concurrently, so their order is not guaranteed. Retries keep
-        the `X-Keygate-Delivery` id; use it to deduplicate.
+        the `X-DSoft-Delivery` id; use it to deduplicate.
       required: [event, timestamp, data]
       properties:
         event: { type: string, example: license.created }
@@ -8555,7 +8555,7 @@ components:
         bank_name: { type: string, example: MB Bank }
         bank_bin: { type: string, example: "970422" }
         account_no: { type: string, example: "0978482700" }
-        account_name: { type: string, example: CONG TY TNHH KEYGATE }
+        account_name: { type: string, example: CONG TY TNHH DSOFT }
 
     PaymentAttempt:
       type: object

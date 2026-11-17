@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/tabloy/keygate/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
 )
 
 func TestCodecRoundTripBindsAAD(t *testing.T) {

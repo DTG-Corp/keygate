@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 	"github.com/google/uuid"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
 )
 
 func TestPaymentSchemaTablesExist(t *testing.T) {

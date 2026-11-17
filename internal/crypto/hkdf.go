@@ -13,8 +13,12 @@ import (
 const SubkeyBytes = 32
 
 // purposePrefix is prepended to every purpose string so the same master
-// across two Keygate versions cannot accidentally produce the same subkey
+// across two DSoft releases cannot accidentally produce the same subkey
 // for "license-key" if the protocol changes.
+//
+// The "keygate-v1-" value is FROZEN: it is part of the on-disk key
+// derivation for secrets written before the DSoft rebrand. Changing it
+// would make every stored ciphertext undecryptable.
 const purposePrefix = "keygate-v1-"
 
 // DeriveSubkey produces a 32-byte subkey from the master key, deterministically

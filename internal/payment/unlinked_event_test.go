@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dtg-corp/dsoft/internal/model"
 	"github.com/stripe/stripe-go/v82"
-	"github.com/tabloy/keygate/internal/model"
 )
 
 // A subscription event that arrives after the licence was unlinked

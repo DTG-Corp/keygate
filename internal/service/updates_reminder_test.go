@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // The reminder claims its (license, tag) row, hands the mail to the
@@ -55,7 +55,7 @@ func TestSendUpdatesEndingReminders_QueuesAndClosesTheClaim(t *testing.T) {
 	}
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
-	c := NewExpiryChecker(s, NewEmailService("127.0.0.1", strconv.Itoa(port), "", "", "keygate@test.local", slog.Default(), s), nil, slog.Default())
+	c := NewExpiryChecker(s, NewEmailService("127.0.0.1", strconv.Itoa(port), "", "", "dsoft@test.local", slog.Default(), s), nil, slog.Default())
 
 	start := time.Now()
 	c.SendUpdatesEndingReminders(ctx)

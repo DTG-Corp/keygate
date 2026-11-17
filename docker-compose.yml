@@ -1,6 +1,6 @@
 services:
-  keygate:
-    image: ghcr.io/tabloy/keygate:latest
+  dsoft:
+    image: ghcr.io/dtg-corp/dsoft:latest
     # build: .  # uncomment to build from source
     ports:
       - "9000:9000"
@@ -16,7 +16,7 @@ services:
       ENVIRONMENT: production
       BASE_URL: ${BASE_URL:-http://localhost:9000}
       # The bundled postgres service, not the localhost URL in .env.example.
-      DATABASE_URL: postgres://keygate:keygate@postgres:5432/keygate?sslmode=disable
+      DATABASE_URL: postgres://dsoft:dsoft@postgres:5432/dsoft?sslmode=disable
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       LICENSE_SIGNING_KEY: ${LICENSE_SIGNING_KEY:?Set LICENSE_SIGNING_KEY in .env}
       # Also taken from the shell or `--env-file`, for deployments that
@@ -43,16 +43,16 @@ services:
   postgres:
     image: postgres:18-alpine
     environment:
-      POSTGRES_USER: keygate
-      POSTGRES_PASSWORD: keygate
-      POSTGRES_DB: keygate
+      POSTGRES_USER: dsoft
+      POSTGRES_PASSWORD: dsoft
+      POSTGRES_DB: dsoft
     volumes:
       # postgres:18+ images expect the volume mounted at /var/lib/postgresql
       # (data lives in a versioned subdirectory); mounting .../data makes
       # initdb fail on a fresh volume. https://github.com/docker-library/postgres/issues/37
       - pgdata:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U keygate"]
+      test: ["CMD-SHELL", "pg_isready -U dsoft"]
       interval: 10s
       timeout: 5s
       retries: 5

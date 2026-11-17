@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/license"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/license"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // mailCatcher is an SMTP server that accepts every message and keeps
@@ -168,7 +168,7 @@ func newFallbackFixture(t *testing.T) *fallbackFixture {
 	f.mail = newMailCatcher(t)
 	host, port, _ := net.SplitHostPort(f.mail.addr)
 	wh := NewWebhookService(s, slog.Default(), time.Second, 0, true)
-	f.c = NewExpiryChecker(s, NewEmailService(host, port, "", "", "keygate@test.local", slog.Default(), s), wh, slog.Default())
+	f.c = NewExpiryChecker(s, NewEmailService(host, port, "", "", "dsoft@test.local", slog.Default(), s), wh, slog.Default())
 	return f
 }
 

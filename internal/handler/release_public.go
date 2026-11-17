@@ -12,12 +12,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/license"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/internal/storage"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/license"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/service"
+	"github.com/dtg-corp/dsoft/internal/storage"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 // ReleasePublicHandler exposes the endpoints clients use:
@@ -398,7 +398,7 @@ func (h *ReleasePublicHandler) FeedVelopack(c *gin.Context) {
 // optionally ending in a platform) and requests releases.{channel}.json
 // under it. The C# client adds rid and keeps the base URL's query; the
 // Rust core replaces the query with localVersion, id and stagingId. The
-// Keygate channel comes from the file name unless a channel query
+// DSoft channel comes from the file name unless a channel query
 // parameter is given.
 func (h *ReleasePublicHandler) FeedVelopackIndex(c *gin.Context) {
 	// {base}/{file}, where the base URL may end in a platform:
@@ -441,7 +441,7 @@ func (h *ReleasePublicHandler) FeedVelopackIndex(c *gin.Context) {
 		platform = service.VelopackPlatform(q.Get("rid"))
 	}
 	if platform == "" {
-		response.BadRequest(c, "no platform: end the Velopack base URL with one, such as /velopack/windows-x64, or send a rid Keygate serves")
+		response.BadRequest(c, "no platform: end the Velopack base URL with one, such as /velopack/windows-x64, or send a rid DSoft serves")
 		return
 	}
 	q.Set("platform", platform)

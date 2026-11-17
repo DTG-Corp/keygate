@@ -20,9 +20,9 @@ import (
 	"github.com/uptrace/bun/dialect/pgdialect"
 	"github.com/uptrace/bun/driver/pgdriver"
 
-	"github.com/tabloy/keygate/internal/crypto"
-	"github.com/tabloy/keygate/internal/license"
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/crypto"
+	"github.com/dtg-corp/dsoft/internal/license"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 type Store struct {
@@ -133,7 +133,9 @@ func (s *Store) RunMigrations(dir string) error {
 		`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT NOT NULL DEFAULT ''`)
 
 	// Acquire advisory lock to prevent concurrent migration across instances.
-	// Lock ID 7367616 = crc32("keygate_migrations") — unique per application.
+	// Lock ID 7367616 = crc32("keygate_migrations") — FROZEN: it is the
+	// pre-rebrand lock identity, kept so instances still running an older
+	// build serialise migrations against this one. Unique per application.
 	// The lock belongs to a session, so it is taken, held and released on
 	// one pinned connection, and the migrations run on that connection
 	// too. Through the pool, the lock lived on whichever connection ran

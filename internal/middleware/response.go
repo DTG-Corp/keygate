@@ -3,7 +3,7 @@ package middleware
 import (
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 // The middleware layer answers with the same envelope as every

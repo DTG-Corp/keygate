@@ -22,9 +22,9 @@ import (
 	stripeprice "github.com/stripe/stripe-go/v82/price"
 	"github.com/stripe/stripe-go/v82/subscription"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 // A customer changes what their subscription bills (its plan, its
@@ -1009,6 +1009,9 @@ func (h *StripeHandler) changeSubscription(c *gin.Context, req changeRequest, pr
 	params.AddExpand("latest_invoice")
 	// The same change asked again (a retried request) is the same request
 	// to Stripe, which makes it once.
+	// The "keygate-change:" prefix is FROZEN: it is the dedup identity of
+	// changes already sent before the DSoft rebrand, so a retry spanning
+	// the rename still resolves to the same Stripe request.
 	params.SetIdempotencyKey(fmt.Sprintf("keygate-change:%s:%s:%d:%d", ch.lic.ID, ch.price, ch.quantity, prorationDate))
 	update := func(timeout time.Duration) (*stripe.Subscription, error) {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(c), timeout)

@@ -25,26 +25,26 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stripe/stripe-go/v82"
 
-	"github.com/tabloy/keygate/internal/branding"
-	"github.com/tabloy/keygate/internal/config"
-	"github.com/tabloy/keygate/internal/crypto"
-	"github.com/tabloy/keygate/internal/handler"
-	"github.com/tabloy/keygate/internal/license"
-	"github.com/tabloy/keygate/internal/middleware"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/payment/providercfg"
-	"github.com/tabloy/keygate/internal/payment/providers/payos"
-	"github.com/tabloy/keygate/internal/payment/providers/sepay"
-	"github.com/tabloy/keygate/internal/payment/reconcile"
-	"github.com/tabloy/keygate/internal/payment/settlement"
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/internal/storage"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/version"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/branding"
+	"github.com/dtg-corp/dsoft/internal/config"
+	"github.com/dtg-corp/dsoft/internal/crypto"
+	"github.com/dtg-corp/dsoft/internal/handler"
+	"github.com/dtg-corp/dsoft/internal/license"
+	"github.com/dtg-corp/dsoft/internal/middleware"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/payos"
+	"github.com/dtg-corp/dsoft/internal/payment/providers/sepay"
+	"github.com/dtg-corp/dsoft/internal/payment/reconcile"
+	"github.com/dtg-corp/dsoft/internal/payment/settlement"
+	"github.com/dtg-corp/dsoft/internal/service"
+	"github.com/dtg-corp/dsoft/internal/storage"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/version"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 // credentialQueryParams are query parameters whose values must never
@@ -817,7 +817,7 @@ func main() {
 	docsPage := func(c *gin.Context) {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(`<!DOCTYPE html>
 <html><head>
-<title>Keygate API</title>
+<title>DSoft API</title>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 </head><body>
@@ -1500,7 +1500,7 @@ func main() {
 	}
 
 	go func() {
-		logger.Info("Keygate starting", "port", cfg.Port)
+		logger.Info("DSoft starting", "port", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("server stopped", "error", err)
 			os.Exit(1)

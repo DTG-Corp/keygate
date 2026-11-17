@@ -20,9 +20,9 @@ import (
 	"github.com/stripe/stripe-go/v82/subscription"
 	"github.com/uptrace/bun"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/pkg/response"
 )
 
 // Upgrading a licence Stripe doesn't bill — a free plan's, issued by an

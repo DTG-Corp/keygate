@@ -12,15 +12,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/tabloy/keygate/internal/middleware"
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/payment/provider/fake"
-	"github.com/tabloy/keygate/internal/payment/providercfg"
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/middleware"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/provider/fake"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // paymentsFixture is the shared handler fixture plus the checkout
@@ -49,7 +49,7 @@ func newPaymentsFixture(t *testing.T) *paymentsFixture {
 	f := newAPIFixture(t)
 	fp := fake.New("sepay")
 	svc := &checkout.Service{
-		Store: f.s, BaseURL: "https://keygate.example.com",
+		Store: f.s, BaseURL: "https://dsoft.example.com",
 		Providers: (&paymentProviderFactory{prov: fp}).fn,
 	}
 	pf := &paymentsFixture{
@@ -113,7 +113,7 @@ func (f *paymentsFixture) seedOrder(t *testing.T, plan *model.Plan, email, provi
 		QRPayload:   "https://qr.example.com/" + order.Code,
 		CheckoutURL: "https://pay.example.com/" + order.Code,
 		Raw: json.RawMessage(`{"bank":{"bank_name":"MB","bank_bin":"970422","account_no":"0978482700",` +
-			`"account_name":"CONG TY TNHH KEYGATE"},"description":"` + order.Code + `"}`),
+			`"account_name":"CONG TY TNHH DSOFT"},"description":"` + order.Code + `"}`),
 		ExpiresAt: ptrTime(time.Now().Add(time.Hour)),
 	}
 	if err := f.s.CreatePaymentAttempt(f.ctx, attempt); err != nil {

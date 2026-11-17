@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // paidPlan is a monthly subscription plan with grace days of grace.

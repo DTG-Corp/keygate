@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/payment/checkout"
-	"github.com/tabloy/keygate/internal/payment/domain"
-	"github.com/tabloy/keygate/internal/payment/provider"
-	"github.com/tabloy/keygate/internal/payment/provider/fake"
-	"github.com/tabloy/keygate/internal/payment/providercfg"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/internal/testsupport/testdb"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/payment/checkout"
+	"github.com/dtg-corp/dsoft/internal/payment/domain"
+	"github.com/dtg-corp/dsoft/internal/payment/provider"
+	"github.com/dtg-corp/dsoft/internal/payment/provider/fake"
+	"github.com/dtg-corp/dsoft/internal/payment/providercfg"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/internal/testsupport/testdb"
 )
 
 // fixture is a priced product/plan pair per test. The email suffix keeps
@@ -561,7 +561,7 @@ func TestCreateOrderBuildsReturnAndCancelURLs(t *testing.T) {
 	fp := fake.New("payos")
 	svc := &checkout.Service{
 		Store: f.s, Providers: newFactory(fp).providerFactory(),
-		BaseURL: "https://keygate.example.com/",
+		BaseURL: "https://dsoft.example.com/",
 	}
 
 	res, err := svc.CreateOrder(f.ctx, checkout.CreateOrderInput{
@@ -574,7 +574,7 @@ func TestCreateOrderBuildsReturnAndCancelURLs(t *testing.T) {
 		t.Fatalf("provider calls = %d", len(fp.Calls))
 	}
 	got := fp.Calls[0]
-	wantReturn := "https://keygate.example.com/checkout/success?code=" + res.Order.Code
+	wantReturn := "https://dsoft.example.com/checkout/success?code=" + res.Order.Code
 	wantCancel := wantReturn + "&canceled=1"
 	if got.ReturnURL != wantReturn {
 		t.Errorf("ReturnURL = %q, want %q", got.ReturnURL, wantReturn)

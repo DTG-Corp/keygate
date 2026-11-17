@@ -28,11 +28,11 @@ import (
 	"github.com/stripe/stripe-go/v82/subscription"
 	"github.com/stripe/stripe-go/v82/webhook"
 
-	"github.com/tabloy/keygate/internal/model"
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/pkg/apperr"
-	"github.com/tabloy/keygate/pkg/response"
+	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/dtg-corp/dsoft/internal/service"
+	"github.com/dtg-corp/dsoft/internal/store"
+	"github.com/dtg-corp/dsoft/pkg/apperr"
+	"github.com/dtg-corp/dsoft/pkg/response"
 	"github.com/uptrace/bun"
 )
 
@@ -588,7 +588,7 @@ func (h *StripeHandler) onAsyncPaymentFailed(ctx context.Context, raw json.RawMe
 	// A subscription checkout's subscription outlives its failed first
 	// payment in Stripe, and would go on billing for a licence that was
 	// never issued: a session never succeeds after this event. Cancelled,
-	// unless a licence does follow it after all, or it is not one Keygate
+	// unless a licence does follow it after all, or it is not one DSoft
 	// sells (the account may bill other products, whose metadata may use
 	// the same keys): known, as at fulfilment, by a plan the session's
 	// metadata names or the subscription's price.
@@ -701,7 +701,7 @@ func (h *StripeHandler) fulfillCheckout(ctx context.Context, email, customerID, 
 			return false, fmt.Errorf("find plan %s: %w", metadata["plan_id"], err)
 		}
 	}
-	// Sessions created outside Keygate (Stripe Payment Links, the
+	// Sessions created outside DSoft (Stripe Payment Links, the
 	// merchant's own integration) carry no plan_id metadata, and a
 	// one-time payment has no subscription to look up. The line items
 	// still say which price was bought — resolve the plan from that.
@@ -832,7 +832,7 @@ func (h *StripeHandler) fulfillCheckout(ctx context.Context, email, customerID, 
 	}
 
 	// The update period is the one that was on offer at checkout.
-	// Sessions Keygate created carry it; sessions created elsewhere
+	// Sessions DSoft created carry it; sessions created elsewhere
 	// (Stripe Payment Links) carry no terms, so those fall back to
 	// the plan as it reads now.
 	updatesDays := plan.UpdatesDays
@@ -845,7 +845,7 @@ func (h *StripeHandler) fulfillCheckout(ctx context.Context, email, customerID, 
 				"session_id", sessionID, "value", v, "plan_id", plan.ID)
 		}
 	default:
-		// A session Keygate did not create — a Stripe Payment Link —
+		// A session DSoft did not create — a Stripe Payment Link —
 		// carries no terms. The plan's history says which period was
 		// on offer when the buyer opened that checkout, whatever the
 		// plan has been edited to since.
@@ -862,7 +862,7 @@ func (h *StripeHandler) fulfillCheckout(ctx context.Context, email, customerID, 
 		}
 	}
 	lic.UpdatesUntil, lic.UpdatesTermsSet = model.UpdatesUntilFor(plan.LicenseType, updatesDays, time.Now()), true
-	// The switch is what stops a period being sold: Keygate's own
+	// The switch is what stops a period being sold: DSoft's own
 	// checkout is refused while it is off. It does not reach the
 	// sessions already open in Stripe, and a Payment Link the
 	// merchant made answers to nobody at all — a customer can open
@@ -1597,7 +1597,7 @@ func (h *StripeHandler) SyncRecentCheckouts(ctx context.Context) {
 	}
 }
 
-// invoiceEvent is the part of an invoice webhook payload Keygate acts
+// invoiceEvent is the part of an invoice webhook payload DSoft acts
 // on. Stripe moved the subscription reference in API version
 // 2025-03-31: older versions put it at invoice.subscription, current
 // ones under invoice.parent.subscription_details.subscription. Both
@@ -1700,7 +1700,7 @@ func (e *invoiceEvent) SubscriptionID() string {
 }
 
 // subscriptionEvent is the part of a subscription webhook payload
-// Keygate acts on. current_period_end moved from the subscription to
+// DSoft acts on. current_period_end moved from the subscription to
 // its items in API version 2025-03-31; read both.
 type subscriptionEvent struct {
 	ID               string `json:"id"`
@@ -1723,7 +1723,7 @@ type subscriptionEvent struct {
 	} `json:"pending_update"`
 }
 
-// subscriptionItemEvent is the part of a subscription item Keygate
+// subscriptionItemEvent is the part of a subscription item DSoft
 // reads: when its period ends, how many it bills, and at which price.
 type subscriptionItemEvent struct {
 	CurrentPeriodEnd int64 `json:"current_period_end"`
@@ -3679,7 +3679,7 @@ func (h *StripeHandler) productName(ctx context.Context, productID string) strin
 }
 
 // resolvePlanFromLineItems maps a checkout session to a plan through
-// the price on its first line item. Keygate creates single-item
+// the price on its first line item. DSoft creates single-item
 // sessions; a multi-item session built elsewhere fulfils its first
 // item only.
 func (h *StripeHandler) resolvePlanFromLineItems(ctx context.Context, sessionID string) (*model.Plan, error) {

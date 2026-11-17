@@ -12,7 +12,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/tabloy/keygate/internal/middleware"
+	"github.com/dtg-corp/dsoft/internal/middleware"
 )
 
 // redisNamespace returns the per-install key prefix (ending in ":") used

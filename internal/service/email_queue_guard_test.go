@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/store"
+	"github.com/dtg-corp/dsoft/internal/store"
 )
 
 // A server with no SMTP configured must leave the queue alone.

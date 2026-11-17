@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tabloy/keygate/internal/model"
+	"github.com/dtg-corp/dsoft/internal/model"
 )
 
 // tauriVerify is a port of tauri-plugin-updater's verify_signature and

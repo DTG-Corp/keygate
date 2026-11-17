@@ -267,7 +267,7 @@ Response `201`:
       "bank_name": "MB Bank",
       "bank_bin": "970422",
       "account_no": "0978482700",
-      "account_name": "CONG TY TNHH KEYGATE"
+      "account_name": "CONG TY TNHH DSOFT"
     }
   }
 }}
@@ -351,7 +351,7 @@ unknown code is `404 NOT_FOUND` (the generic code, not
   "qr_image_url": "https://vietqr.app/img?…",
   "checkout_url": "",
   "bank": { "bank_name": "MB Bank", "bank_bin": "970422",
-            "account_no": "0978482700", "account_name": "CONG TY TNHH KEYGATE" }
+            "account_no": "0978482700", "account_name": "CONG TY TNHH DSOFT" }
 }}
 ```
 
@@ -674,7 +674,7 @@ and this contract are the source of truth.
   `name`, `email`, `phone`, `tax_id`, `address` are.
 - **SePay hosted-gateway checkout creation is deferred to phase 1b.**
   Phase 1a creates only the static VietQR: `CreateAttempt` has no
-  `RedirectURL`/`FormHTML` path, and Keygate never redirects a buyer to
+  `RedirectURL`/`FormHTML` path, and DSoft never redirects a buyer to
   SePay's gateway. The IPN route, `X-Secret-Key` verification and
   settlement are live, so an existing external gateway integration can
   still notify `/api/v1/webhook/sepay-ipn`. The `ipn_secret` credential
