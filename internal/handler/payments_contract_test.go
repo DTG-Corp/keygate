@@ -33,6 +33,7 @@ var paymentSourceFiles = []string{
 	"payments_api.go",
 	"payments_webhook.go",
 	"payments_admin.go",
+	"payments_portal.go",
 	"payment_providers_admin.go",
 	"plan_prices_admin.go",
 }
@@ -52,6 +53,7 @@ var paymentVocabulary = map[string]paymentCode{
 	// Shared envelope codes these handlers use for a malformed body or
 	// an internal fault. Their global statuses are fixed everywhere.
 	"BAD_REQUEST":    {status: 400, emitted: true},
+	"UNAUTHORIZED":   {status: 401, emitted: true},
 	"NOT_FOUND":      {status: 404, emitted: true},
 	"INTERNAL_ERROR": {status: 500, emitted: true},
 
@@ -96,7 +98,7 @@ var paymentVocabulary = map[string]paymentCode{
 	"PAYMENT_AMOUNT_MISMATCH":       {status: 422, emitted: false},
 	"PAYMENT_SIGNATURE_INVALID":     {status: 400, emitted: false},
 	"PAYMENT_CURRENCY_UNSUPPORTED":  {status: 422, emitted: false},
-	"PAYMENT_TAX_CODE_REQUIRED":     {status: 422, emitted: false},
+	"PAYMENT_TAX_CODE_REQUIRED":     {status: 422, emitted: true},
 	"PAYMENT_COUPON_INVALID":        {status: 422, emitted: false},
 	"PAYMENT_COUPON_EXHAUSTED":      {status: 409, emitted: false},
 	"PAYMENT_COUPON_STACK_LIMIT":    {status: 422, emitted: false},
@@ -104,7 +106,7 @@ var paymentVocabulary = map[string]paymentCode{
 	"PAYMENT_COUPON_NOT_STACKABLE":  {status: 422, emitted: false},
 	"PAYMENT_COUPON_TRIAL_MIXED":    {status: 422, emitted: false},
 	"PAYMENT_COUPON_ASSIGNED":       {status: 422, emitted: false},
-	"INVOICE_NOT_FOUND":             {status: 404, emitted: false},
+	"INVOICE_NOT_FOUND":             {status: 404, emitted: true},
 	"INVOICE_ALREADY_ISSUED":        {status: 409, emitted: false},
 	"EINVOICE_PROVIDER_ERROR":       {status: 502, emitted: false},
 
