@@ -1,37 +1,30 @@
 <div align="center">
 
-<img src="web/public/logo.svg" width="72" height="72" alt="Keygate" />
+<img src="web/public/logo.svg" width="72" height="72" alt="DSoft" />
 
-# Keygate
+# DSoft
 
 **Open source software license management platform.**
 
 The self-hosted alternative to Keygen, Cryptlex, and LicenseSpring.
 
-[Website](https://keygate.app) · [Documentation](https://keygate.app/docs) · [Community](https://github.com/dtg-corp/dsoft/discussions)
+[Website](https://github.com/dtg-corp/dsoft) · [Documentation](https://github.com/dtg-corp/dsoft/tree/main/docs) · [Community](https://github.com/dtg-corp/dsoft/discussions)
 
 [![License](https://img.shields.io/badge/license-AGPL%20v3-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/tabloy/keygate?label=release&color=green)](https://github.com/dtg-corp/dsoft/releases)
-[![Stars](https://img.shields.io/github/stars/tabloy/keygate?style=flat)](https://github.com/dtg-corp/dsoft/stargazers)
-[![Sponsor](https://img.shields.io/badge/sponsor-❤-ff69b4)](https://ko-fi.com/alanisme)
 
 **[English](README.md)** · **[简体中文](README.zh-CN.md)**
-
-<br />
-
-<img src="web/public/screenshot.png" width="800" alt="Keygate Dashboard" />
 
 </div>
 
 <br />
 
-## Why Keygate?
+## Why DSoft?
 
 You've built great software. Now you need to decide who can use it, how they pay for it, and what features they get access to.
 
 Commercial license platforms charge per-seat, per-month, and your customer data lives on someone else's servers. Building your own takes months of engineering on activation logic, payment webhooks, quota tracking, and all the edge cases that come at 2 AM.
 
-**Keygate is the middle ground.** A production-ready license server you deploy on your own infrastructure, connect to your own Stripe, and manage through a clean dashboard. It handles everything from activation to dunning — so you can focus on building your product.
+**DSoft is the middle ground.** A production-ready license server you deploy on your own infrastructure, connect to your own Stripe, and manage through a clean dashboard. It handles everything from activation to dunning — so you can focus on building your product.
 
 One server. One database. Full control. Free, forever.
 
@@ -41,7 +34,7 @@ One server. One database. Full control. Free, forever.
 
 | | |
 |:---|:---|
-| **🧑‍💻 Indie Developers** — Selling a desktop app, CLI tool, or Electron app? Keygate handles license keys, activation limits, and trials so you can focus on shipping. | **🏢 SaaS Companies** — Managing subscription tiers with different feature sets? Define plans with entitlements, track usage, and let Stripe handle billing automatically. |
+| **🧑‍💻 Indie Developers** — Selling a desktop app, CLI tool, or Electron app? DSoft handles license keys, activation limits, and trials so you can focus on shipping. | **🏢 SaaS Companies** — Managing subscription tiers with different feature sets? Define plans with entitlements, track usage, and let Stripe handle billing automatically. |
 | **🏭 Enterprise Vendors** — Need floating licenses for large teams? Concurrent seat checkout with heartbeat monitoring, perfect for shared-seat environments. | **⚡ API Providers** — Enforcing rate limits and usage quotas? Atomic quota enforcement tracks every call and warns customers before they hit limits. |
 
 <br />
@@ -58,7 +51,7 @@ Public SDK endpoints (activate / verify / deactivate / usage / download) take `l
 
 Ship signed updates to your installed clients. **Sparkle** (macOS), **Velopack** (Windows), and **Tauri** (cross-platform) updaters all consume the same release feed — one publish, every updater compatible. Per-platform binaries grouped under a single release, **atomic publish gate** (no half-uploaded releases ever leak), **yank** for instant rollback. Per-product **Ed25519 signing keys** with private keys encrypted at rest under AES-256-GCM + HKDF-derived subkeys. Server-side SHA-256 for integrity (never trust the client's hash). Stable feeds are public — your customers' auto-updater never breaks when a license rotates. Products sold with a maintenance period turn on `feed_license_required` — the updater then sends the license and only sees releases published inside the customer's update period, while the app itself keeps running either way. Per-product `minimum_supported_version` floor for forced upgrades.
 
-Object storage is S3-compatible — Cloudflare R2, AWS S3, MinIO, anything that speaks SigV4. Presigned URLs for direct browser upload (no proxying through Keygate), and license-gated short-TTL download URLs.
+Object storage is S3-compatible — Cloudflare R2, AWS S3, MinIO, anything that speaks SigV4. Presigned URLs for direct browser upload (no proxying through DSoft), and license-gated short-TTL download URLs.
 
 ### 📊 Usage Metering
 
@@ -102,8 +95,8 @@ A Go server + PostgreSQL + (optional) S3-compatible storage for release artifact
 
 ```bash
 # 1. Download
-curl -O https://raw.githubusercontent.com/tabloy/keygate/main/docker-compose.yml
-curl -O https://raw.githubusercontent.com/tabloy/keygate/main/.env.example
+curl -O https://raw.githubusercontent.com/dtg-corp/dsoft/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/dtg-corp/dsoft/main/.env.example
 cp .env.example .env
 
 # 2. Set your secrets
@@ -117,19 +110,19 @@ docker compose up -d
 
 ```bash
 git clone https://github.com/dtg-corp/dsoft.git
-cd keygate && cp .env.example .env
-make build && ./bin/keygate
+cd dsoft && cp .env.example .env
+make build && ./bin/dsoft
 ```
 
 Open **http://localhost:9000** — the setup wizard guides you from there.
 
-> 📖 Full docs, deployment guides, and SDK examples at **[keygate.app/docs](https://keygate.app/docs)**
+> 📖 Full docs, deployment guides, and SDK examples at **[the docs](https://github.com/dtg-corp/dsoft/tree/main/docs)**
 
 <br />
 
 ## Compared to Alternatives
 
-| | **Keygate** | Keygen | Cryptlex | LicenseSpring |
+| | **DSoft** | Keygen | Cryptlex | LicenseSpring |
 |:---|:---:|:---:|:---:|:---:|
 | Open source | **✅ AGPL v3** | Partial | ❌ | ❌ |
 | Self-hosted | **✅** | ✅ | ❌ | ❌ |
@@ -151,17 +144,6 @@ Open **http://localhost:9000** — the setup wizard guides you from there.
 
 - **[Discussions](https://github.com/dtg-corp/dsoft/discussions)** — Questions, ideas, show & tell
 - **[Issues](https://github.com/dtg-corp/dsoft/issues)** — Bug reports and feature requests
-- **[Blog](https://keygate.app/blog)** — Updates and engineering stories
-- **[Sponsor](https://keygate.app/sponsorships)** — Support the project
-
-## Sponsors
-
-Keygate is free and self-hosted. If it saves you the cost of a hosted licensing
-service, [sponsoring on Ko-fi](https://ko-fi.com/alanisme) keeps development going.
-
-<!-- sponsors:start -->
-_Be the first._
-<!-- sponsors:end -->
 
 ## Contributing
 
@@ -181,18 +163,8 @@ Contact [hello@keygate.app](mailto:hello@keygate.app).
 
 You are free to fork, modify, and self-host this software under the AGPL v3. The **"Powered by Keygate"** attribution in the UI must be preserved (see [NOTICE](NOTICE)).
 
-## Star History
-
-<a href="https://star-history.com/#tabloy/keygate&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=tabloy/keygate&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=tabloy/keygate&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=tabloy/keygate&type=Date" width="600" />
- </picture>
-</a>
-
 ---
 
 <div align="center">
-<sub>If Keygate helps your business, consider giving it a ⭐</sub>
+<sub>If DSoft helps your business, consider giving it a ⭐</sub>
 </div>

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let a Vietnamese customer buy a Keygate licence with a SePay VietQR transfer or a PayOS payment link, and have Keygate create/extend the licence reliably from provider webhooks plus a reconciler.
+**Goal:** Let a Vietnamese customer buy a DSoft licence with a SePay VietQR transfer or a PayOS payment link, and have DSoft create/extend the licence reliably from provider webhooks plus a reconciler.
 
 **Architecture:** A new provider-neutral payment domain under `internal/payment/` (order/attempt/transaction/event records + a `Provider` interface) runs beside the untouched Stripe code. SePay and PayOS adapters create payment instructions and parse verified webhooks; one settlement service is the only writer that turns a paid order into a licence. A reconciler covers lost webhooks. Phase 1a ships no invoices, no billing engine, no coupons logic and no Stripe API calls — those are Plan 1b/2.
 
@@ -3346,11 +3346,11 @@ func TestSignCreateRequestPinned(t *testing.T) {
 	// amount=…&cancelUrl=…&description=…&orderCode=…&returnUrl=… .
 	req := payos.CreateRequest{
 		OrderCode: 123, Amount: 1200000, Description: "KG7F3K2Q",
-		CancelURL: "https://keygate.example.com/pay/KG7F3K2Q",
-		ReturnURL: "https://keygate.example.com/pay/KG7F3K2Q",
+		CancelURL: "https://dsoft.example.com/pay/KG7F3K2Q",
+		ReturnURL: "https://dsoft.example.com/pay/KG7F3K2Q",
 	}
 	got := payos.SignCreateRequest("checksum-key", req)
-	want := "459f1d7f8ea39ccdd1927f95a478bdf304c7014bbbff1dac653388e2ff8c7c30"
+	want := "286a6cb8f152047c19babb4a76a98d447b9c92c70b8fdff3a42fb4da50d78204"
 	if got != want {
 		t.Fatalf("signature = %s, want %s", got, want)
 	}
@@ -5536,7 +5536,7 @@ Use `newAPIFixture`, an API key with `payments:write`, and a fake provider facto
 ```go
 // internal/handler/payments_api_test.go
 // imports: bytes, context, net/http, net/http/httptest, strings, testing;
-// gin; keygate/internal/middleware, model, payment/checkout,
+// gin; dsoft/internal/middleware, model, payment/checkout,
 // payment/provider, payment/provider/fake, payment/providercfg, store.
 
 func TestCreateOrderViaAPI(t *testing.T) {
@@ -6219,7 +6219,7 @@ const vi = {
   "pay.copy": "Sao chép",
   "pay.copied": "Đã sao chép",
   "pay.paid": "Đã thanh toán",
-  "pay.paid_hint": "Keygate đã nhận được thanh toán và đang cấp license.",
+  "pay.paid_hint": "DSoft đã nhận được thanh toán và đang cấp license.",
   "pay.pending": "Đang chờ thanh toán",
   "pay.expired": "Đơn đã hết hạn",
   "pay.canceled": "Đơn đã huỷ",
@@ -6353,7 +6353,7 @@ export default function CheckoutPayPage() {
       {data.status === "paid" && (
         <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
           <p className="font-medium text-emerald-800">Đã thanh toán</p>
-          <p className="mt-1 text-sm text-emerald-700">Keygate đã nhận được thanh toán và đang cấp license.</p>
+          <p className="mt-1 text-sm text-emerald-700">DSoft đã nhận được thanh toán và đang cấp license.</p>
         </section>
       )}
       {(data.status === "expired" || data.status === "canceled") && (
@@ -6513,7 +6513,7 @@ In `docs/openapi.yaml`: add schemas `PaymentOrder`, `PaymentAttempt`, `PaymentPr
 3. **PayOS:** create the payment channel at payos.vn, paste `client_id`, `api_key`, `checksum_key`; set the return URL base (`payment_return_base_url`); click "Confirm PayOS webhook" once the install is public HTTPS (PayOS probes immediately); do a small real payment because PayOS has no sandbox, then mark the order paid manually if you are testing without money.
 4. **Price entry:** Admin → Plans → add a SePay row (VND) and a PayOS row (VND) for every sellable plan before announcing the store; a plan without a row shows "Chưa có giá — không bán được" and checkout returns `PAYMENT_PRICE_NOT_CONFIGURED`.
 5. **Reconciliation:** the worker closes expired orders every 5 minutes, queries PayOS pending links, and pulls SePay transactions when an API token exists. Check Admin → Payments → Orders for `last_settlement_error`, and Unmatched for transfers that did not match.
-6. **Incident:** if the provider dashboard shows a paid transaction but Keygate does not, copy the transfer reference into Admin → Unmatched, click "Khớp đơn", and enter the order code. Never delete a transaction; ignore it with a reason.
+6. **Incident:** if the provider dashboard shows a paid transaction but DSoft does not, copy the transfer reference into Admin → Unmatched, click "Khớp đơn", and enter the order code. Never delete a transaction; ignore it with a reason.
 
 - [ ] **Step 5: Run the phase-1a acceptance checklist**
 
