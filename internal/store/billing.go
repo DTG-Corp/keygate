@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -311,4 +312,412 @@ func (s *Store) BillingSubscriptionOrNil(ctx context.Context, licenseID string) 
 		return nil, nil
 	}
 	return sub, err
+}
+
+// ─── Phase 1b plan changes and trial conversion ───
+
+// NextCycleUpgradeSessionPrefix marks the license_upgrades row of a
+// next_cycle plan change. Such a row has no payment order — it is applied
+// by the next renewal settlement — so the prefix (not the Stripe column)
+// is what tells it apart from an immediate change whose checkout is open.
+const NextCycleUpgradeSessionPrefix = "billing-next-cycle-"
+
+var (
+	// ErrUpgradeInvalid: the upgrade row or the order it names cannot be
+	// applied (no such upgrade, wrong kind, wrong plan, a replay of a
+	// closed change).
+	ErrUpgradeInvalid = errors.New("upgrade is not applicable")
+	// ErrUpgradeIneligible: the licence cannot change to this plan (wrong
+	// product, inactive plan, an operator hold, an ended period).
+	ErrUpgradeIneligible = errors.New("licence cannot change to this plan")
+	// ErrUpgradeInProgress: the licence already has an open plan change.
+	ErrUpgradeInProgress = errors.New("a plan change is already open for this licence")
+	// ErrTrialConversionInvalid: the order is not a trial conversion, or
+	// the trial licence it names cannot be converted.
+	ErrTrialConversionInvalid = errors.New("trial conversion is not applicable")
+)
+
+// FindPendingUpgradeForLicense returns the licence's open plan change, or
+// nil when there is none. The row is not locked: the caller only needs it
+// to decide whether a retried request is the same change.
+func (s *Store) FindPendingUpgradeForLicense(ctx context.Context, licenseID string) (*model.LicenseUpgrade, error) {
+	up := new(model.LicenseUpgrade)
+	err := s.DB.NewSelect().Model(up).
+		Where("license_id = ?", licenseID).
+		Where("state = ?", model.UpgradePending).
+		Order("created_at DESC", "id DESC").Limit(1).Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find pending upgrade: %w", err)
+	}
+	return up, nil
+}
+
+// FindPendingNextCycleUpgradeIn returns the next_cycle plan change a
+// renewal settlement has to apply, or nil. It locks the row: the renewal
+// that applies it and any concurrent write serialise on this read.
+func (s *Store) FindPendingNextCycleUpgradeIn(ctx context.Context, db bun.IDB, licenseID string) (*model.LicenseUpgrade, error) {
+	up := new(model.LicenseUpgrade)
+	err := db.NewSelect().Model(up).
+		Where("license_id = ?", licenseID).
+		Where("state = ?", model.UpgradePending).
+		Where("payment_order_id IS NULL").
+		Where("stripe_checkout_session_id LIKE ?", NextCycleUpgradeSessionPrefix+"%").
+		Order("created_at DESC", "id DESC").Limit(1).For("UPDATE").Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find pending next-cycle upgrade: %w", err)
+	}
+	return up, nil
+}
+
+// CreateUpgradeForOrderIn writes the pending plan change an immediate
+// upgrade order pays for, linked by payment_order_id. The caller has
+// already created the order; a unique violation means another change
+// already owns it.
+func (s *Store) CreateUpgradeForOrderIn(ctx context.Context, db bun.IDB, u *model.LicenseUpgrade) error {
+	if u == nil || u.PaymentOrderID == "" {
+		return fmt.Errorf("%w: an upgrade row for an order needs payment_order_id", ErrUpgradeInvalid)
+	}
+	if u.ID == "" {
+		u.ID = newID()
+	}
+	u.State = model.UpgradePending
+	if u.CreatedAt.IsZero() {
+		u.CreatedAt = time.Now()
+	}
+	if _, err := db.NewInsert().Model(u).Exec(ctx); err != nil {
+		if IsUniqueViolation(err) {
+			return fmt.Errorf("%w: order %s already pays for a plan change", ErrUpgradeInvalid, u.PaymentOrderID)
+		}
+		return fmt.Errorf("create upgrade for order: %w", err)
+	}
+	return nil
+}
+
+// LinkUpgradeOrderIn points a pending upgrade at the order that now pays
+// for it. Its previous order was left behind (expired checkout), so no
+// settlement can apply that one.
+func (s *Store) LinkUpgradeOrderIn(ctx context.Context, db bun.IDB, upgradeID, orderID string) error {
+	res, err := db.NewRaw(`UPDATE license_upgrades SET payment_order_id = ?
+		WHERE id = ? AND state = 'pending'`, orderID, upgradeID).Exec(ctx)
+	if err != nil {
+		if IsUniqueViolation(err) {
+			return fmt.Errorf("%w: order %s already pays for a plan change", ErrUpgradeInvalid, orderID)
+		}
+		return fmt.Errorf("link upgrade order: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: upgrade %s is not pending", ErrUpgradeInvalid, upgradeID)
+	}
+	return nil
+}
+
+// FindUpgradeByPaymentOrderIn returns the plan change an order pays for,
+// locking the row for the settlement's transaction. A paid upgrade order
+// without a row is ErrUpgradeInvalid: the money must not be granted to
+// whatever plan the order names.
+func (s *Store) FindUpgradeByPaymentOrderIn(ctx context.Context, db bun.IDB, orderID string) (*model.LicenseUpgrade, error) {
+	up := new(model.LicenseUpgrade)
+	err := db.NewSelect().Model(up).
+		Where("payment_order_id = ?", orderID).
+		Limit(1).For("UPDATE").Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: order %s pays for no plan change", ErrUpgradeInvalid, orderID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find upgrade by payment order: %w", err)
+	}
+	return up, nil
+}
+
+// ApplyUpgradeFromOrderIn applies the immediate plan change an upgrade
+// order paid for, on the settlement's transaction: the licence moves to
+// the target plan, the dunning state clears and the subscription follows,
+// while valid_until stays at the period the order paid for.
+//
+// It is idempotent-safe: an already-applied change is returned untouched,
+// which is what a duplicated provider webhook needs.
+func (s *Store) ApplyUpgradeFromOrderIn(ctx context.Context, db bun.IDB, order *model.PaymentOrder, plan *model.Plan) (*model.LicenseUpgrade, error) {
+	if order == nil || plan == nil {
+		return nil, fmt.Errorf("%w: order and plan are required", ErrUpgradeInvalid)
+	}
+	if order.Kind != "upgrade" {
+		return nil, fmt.Errorf("%w: order %s is a %s order", ErrUpgradeInvalid, order.Code, order.Kind)
+	}
+	if plan.ID != order.PlanID {
+		return nil, fmt.Errorf("%w: order %s is for plan %s, not %s", ErrUpgradeInvalid, order.Code, order.PlanID, plan.ID)
+	}
+	// An upgrade order opened by checkout names its licence, but the
+	// upgrade row is the authority: settlement must still work for a
+	// row-first order whose license_id is not stamped yet.
+	first := new(model.LicenseUpgrade)
+	if err := db.NewSelect().Model(first).Where("payment_order_id = ?", order.ID).
+		Limit(1).Scan(ctx); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: order %s pays for no plan change", ErrUpgradeInvalid, order.ID)
+		}
+		return nil, fmt.Errorf("find upgrade by payment order: %w", err)
+	}
+	if first.LicenseID == "" || (order.LicenseID != "" && order.LicenseID != first.LicenseID) {
+		return nil, fmt.Errorf("%w: upgrade %s does not name licence %s", ErrUpgradeInvalid, first.ID, order.LicenseID)
+	}
+	// The licence is locked before the upgrade row is re-read FOR UPDATE.
+	// A renewal settlement takes the licence first and then the next-cycle
+	// row; taking the two in the same order here keeps the two settlements
+	// from deadlocking on a licence that is being renewed and upgraded at
+	// once.
+	lic := new(model.License)
+	if err := db.NewSelect().Model(lic).Where("id = ?", first.LicenseID).For("UPDATE").Scan(ctx); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: licence %s not found", ErrUpgradeIneligible, first.LicenseID)
+		}
+		return nil, err
+	}
+	if plan.ProductID != lic.ProductID || !plan.Active {
+		return nil, fmt.Errorf("%w: plan %s is not for sale on licence %s", ErrUpgradeIneligible, plan.ID, lic.ID)
+	}
+	up, err := s.FindUpgradeByPaymentOrderIn(ctx, db, order.ID)
+	if err != nil {
+		return nil, err
+	}
+	if up.LicenseID != lic.ID {
+		return nil, fmt.Errorf("%w: upgrade %s is not for licence %s", ErrUpgradeInvalid, up.ID, lic.ID)
+	}
+	if up.State == model.UpgradeApplied {
+		return up, nil
+	}
+	if up.State != model.UpgradePending {
+		return nil, fmt.Errorf("%w: upgrade %s is %s", ErrUpgradeInvalid, up.ID, up.State)
+	}
+	if up.LicenseID != lic.ID || up.ToPlanID != plan.ID {
+		return nil, fmt.Errorf("%w: upgrade %s does not name licence %s on plan %s", ErrUpgradeInvalid, up.ID, lic.ID, plan.ID)
+	}
+	// Snapshot the licence as the change found it before the UPDATE.
+	if up.FromPlanID == "" {
+		up.FromPlanID = lic.PlanID
+	}
+	if up.FromStatus == "" {
+		up.FromStatus = lic.Status
+	}
+	if up.FromValidUntil == nil {
+		up.FromValidUntil = lic.ValidUntil
+	}
+	if up.FromUpdatesUntil == nil {
+		up.FromUpdatesUntil = lic.UpdatesUntil
+	}
+	if up.FromPaymentProvider == "" {
+		up.FromPaymentProvider = lic.PaymentProvider
+	}
+	if up.FromCanceledAt == nil {
+		up.FromCanceledAt = lic.CanceledAt
+	}
+	if up.FromQuantity < 1 {
+		up.FromQuantity = lic.Quantity
+	}
+	now := time.Now()
+	if _, err := db.NewUpdate().Model((*model.License)(nil)).
+		Set("plan_id = ?", plan.ID).
+		Set("status = ?", model.StatusActive).
+		Set("past_due_at = NULL").
+		Set("suspended_at = NULL").
+		Set("suspended_by = NULL").
+		Set("updated_at = ?", now).
+		Where("id = ?", lic.ID).Exec(ctx); err != nil {
+		return nil, fmt.Errorf("apply upgrade to licence: %w", err)
+	}
+	// The period is untouched: the customer already paid for it and the
+	// upgrade only changes which plan it buys. The next renewal prices the
+	// new plan.
+	if _, err := db.NewRaw(`UPDATE subscriptions
+		SET plan_id = ?, status = ?, updated_at = ?
+		WHERE license_id = ?`, plan.ID, model.StatusActive, now, lic.ID).Exec(ctx); err != nil {
+		return nil, fmt.Errorf("apply upgrade to subscription: %w", err)
+	}
+	up.ToPlanID = plan.ID
+	up.State = model.UpgradeApplied
+	up.AppliedAt = &now
+	up.PaymentOrderID = order.ID
+	if _, err := db.NewUpdate().Model(up).Column(
+		"state", "applied_at", "to_plan_id", "from_plan_id", "from_status", "from_valid_until",
+		"from_updates_until", "from_updates_terms_set", "from_payment_provider", "from_canceled_at",
+		"from_quantity", "payment_order_id",
+	).WherePK().Exec(ctx); err != nil {
+		return nil, fmt.Errorf("mark upgrade applied: %w", err)
+	}
+	return up, nil
+}
+
+// ApplyNextCycleUpgradeIn applies a next_cycle plan change during a
+// renewal settlement: the licence and its subscription move to the target
+// plan, the new price applies from this renewal on, and the change is
+// marked applied. It charges nothing (there is no order).
+func (s *Store) ApplyNextCycleUpgradeIn(ctx context.Context, db bun.IDB, u *model.LicenseUpgrade) error {
+	if u == nil {
+		return fmt.Errorf("%w: no upgrade", ErrUpgradeInvalid)
+	}
+	if u.State == model.UpgradeApplied {
+		return nil
+	}
+	if u.State != model.UpgradePending || u.PaymentOrderID != "" {
+		return fmt.Errorf("%w: upgrade %s is not an open next-cycle change", ErrUpgradeInvalid, u.ID)
+	}
+	lic := new(model.License)
+	if err := db.NewSelect().Model(lic).Where("id = ?", u.LicenseID).For("UPDATE").Scan(ctx); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: licence %s not found", ErrUpgradeIneligible, u.LicenseID)
+		}
+		return err
+	}
+	if u.FromPlanID == "" {
+		u.FromPlanID = lic.PlanID
+	}
+	if u.FromStatus == "" {
+		u.FromStatus = lic.Status
+	}
+	if u.FromValidUntil == nil {
+		u.FromValidUntil = lic.ValidUntil
+	}
+	if u.FromQuantity < 1 {
+		u.FromQuantity = lic.Quantity
+	}
+	now := time.Now()
+	if _, err := db.NewUpdate().Model((*model.License)(nil)).
+		Set("plan_id = ?", u.ToPlanID).
+		Set("updated_at = ?", now).
+		Where("id = ?", lic.ID).Exec(ctx); err != nil {
+		return fmt.Errorf("apply next-cycle upgrade to licence: %w", err)
+	}
+	if _, err := db.NewRaw(`UPDATE subscriptions SET plan_id = ?, status = ?, updated_at = ?
+		WHERE license_id = ?`, u.ToPlanID, model.StatusActive, now, lic.ID).Exec(ctx); err != nil {
+		return fmt.Errorf("apply next-cycle upgrade to subscription: %w", err)
+	}
+	u.State = model.UpgradeApplied
+	u.AppliedAt = &now
+	if _, err := db.NewUpdate().Model(u).Column(
+		"state", "applied_at", "to_plan_id", "from_plan_id", "from_status", "from_valid_until",
+		"from_quantity",
+	).WherePK().Exec(ctx); err != nil {
+		return fmt.Errorf("mark next-cycle upgrade applied: %w", err)
+	}
+	return nil
+}
+
+// ConvertTrialLicenseFromOrderIn converts the trial licence a paid
+// trial-conversion order names, in place, on the settlement's
+// transaction: the licence becomes active on the order's plan, its first
+// paid period starts at trial_end, and the subscription loses its trial
+// dates. It returns the converted licence — no second licence is minted.
+//
+// The order cannot name the licence in license_id (it is a kind new
+// order), so metadata.billing.trial_license_id does. A missing or
+// mismatched trial licence is ErrTrialConversionInvalid: the money must
+// not create a second licence for a trial that is already paid for.
+func (s *Store) ConvertTrialLicenseFromOrderIn(ctx context.Context, db bun.IDB, order *model.PaymentOrder, plan *model.Plan) (*model.License, error) {
+	if order == nil || plan == nil {
+		return nil, fmt.Errorf("%w: order and plan are required", ErrTrialConversionInvalid)
+	}
+	if order.Kind != "new" {
+		return nil, fmt.Errorf("%w: order %s is a %s order", ErrTrialConversionInvalid, order.Code, order.Kind)
+	}
+	var meta struct {
+		Billing struct {
+			Source         string `json:"source"`
+			TrialLicenseID string `json:"trial_license_id"`
+			TrialEnd       string `json:"trial_end"`
+		} `json:"billing"`
+	}
+	if err := json.Unmarshal(order.Metadata, &meta); err != nil {
+		return nil, fmt.Errorf("%w: order %s metadata is not JSON", ErrTrialConversionInvalid, order.Code)
+	}
+	if meta.Billing.Source != "trial_conversion" || meta.Billing.TrialLicenseID == "" {
+		return nil, fmt.Errorf("%w: order %s is not a trial conversion", ErrTrialConversionInvalid, order.Code)
+	}
+	if plan.ID != order.PlanID || plan.ProductID != order.ProductID || !plan.Active {
+		return nil, fmt.Errorf("%w: plan %s is not the plan the order sells", ErrTrialConversionInvalid, plan.ID)
+	}
+	lic := new(model.License)
+	if err := db.NewSelect().Model(lic).Where("id = ?", meta.Billing.TrialLicenseID).For("UPDATE").Scan(ctx); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: trial licence %s not found", ErrTrialConversionInvalid, meta.Billing.TrialLicenseID)
+		}
+		return nil, err
+	}
+	if lic.ProductID != order.ProductID {
+		return nil, fmt.Errorf("%w: trial licence %s belongs to another product", ErrTrialConversionInvalid, lic.ID)
+	}
+	var planType, billingInterval string
+	var planTrialDays int
+	if err := db.NewRaw("SELECT license_type, trial_days, billing_interval FROM plans WHERE id = ?", plan.ID).
+		Scan(ctx, &planType, &planTrialDays, &billingInterval); err != nil {
+		return nil, fmt.Errorf("read plan %s: %w", plan.ID, err)
+	}
+	trialEnd := trialEndFromConversion(ctx, db, lic, meta.Billing.TrialEnd)
+	end := trialEnd.Add(paidOrderInterval(planType, planTrialDays, billingInterval))
+	// A retry that finds the conversion already committed returns the
+	// licence rather than failing the payment.
+	if lic.Status != model.StatusTrialing {
+		if lic.Status == model.StatusActive && lic.PlanID == plan.ID &&
+			lic.ValidUntil != nil && lic.ValidUntil.Equal(end) {
+			return lic, nil
+		}
+		return nil, fmt.Errorf("%w: licence %s is %s, not trialing", ErrTrialConversionInvalid, lic.ID, lic.Status)
+	}
+	quantity := order.Quantity
+	if quantity < 1 {
+		quantity = lic.Quantity
+	}
+	if quantity < 1 {
+		quantity = 1
+	}
+	now := time.Now()
+	if _, err := db.NewUpdate().Model((*model.License)(nil)).
+		Set("plan_id = ?", plan.ID).
+		Set("status = ?", model.StatusActive).
+		Set("quantity = ?", quantity).
+		Set("valid_until = ?", end).
+		Set("payment_provider = ?", order.Provider).
+		Set("past_due_at = NULL").
+		Set("updated_at = ?", now).
+		Where("id = ?", lic.ID).Exec(ctx); err != nil {
+		return nil, fmt.Errorf("convert trial licence: %w", err)
+	}
+	// The subscription keeps its payment provider and external reference:
+	// the rail did not change, only the plan and the trial dates.
+	if _, err := db.NewRaw(`UPDATE subscriptions
+		SET plan_id = ?, status = ?, current_period_start = ?, current_period_end = ?,
+		    trial_start = NULL, trial_end = NULL, updated_at = ?
+		WHERE license_id = ?`,
+		plan.ID, model.StatusActive, trialEnd, end, now, lic.ID).Exec(ctx); err != nil {
+		return nil, fmt.Errorf("convert trial subscription: %w", err)
+	}
+	lic.PlanID, lic.Status, lic.Quantity = plan.ID, model.StatusActive, quantity
+	lic.ValidUntil, lic.PaymentProvider, lic.PastDueAt = &end, order.Provider, nil
+	return lic, nil
+}
+
+// trialEndFromConversion is the instant the paid period starts: the
+// order's reserved trial_end, else the subscription's, else the trial
+// licence's own end, else now (a conversion with no recorded end still
+// starts a full period rather than failing the payment).
+func trialEndFromConversion(ctx context.Context, db bun.IDB, lic *model.License, reserved string) time.Time {
+	if reserved != "" {
+		if t, err := time.Parse(time.RFC3339, reserved); err == nil {
+			return t.UTC()
+		}
+	}
+	var subTrialEnd *time.Time
+	err := db.NewRaw(`SELECT trial_end FROM subscriptions WHERE license_id = ?
+		ORDER BY created_at DESC LIMIT 1`, lic.ID).Scan(ctx, &subTrialEnd)
+	if err == nil && subTrialEnd != nil {
+		return subTrialEnd.UTC()
+	}
+	if lic.ValidUntil != nil {
+		return lic.ValidUntil.UTC()
+	}
+	return time.Now().UTC()
 }

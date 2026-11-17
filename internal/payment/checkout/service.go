@@ -169,6 +169,12 @@ type CreateOrderInput struct {
 	// unexported on purpose: pricing happens exactly once, inside
 	// checkout, and createOrder reuses the number the buyer was shown.
 	quote *coupons.Quote
+	// CreditMinor is the unused-time credit an immediate plan upgrade
+	// applies to the target price. It joins the order's discount — the
+	// tax is not recomputed — and is stored on the order
+	// (payment_orders.credit_minor) so settlement and the invoice see the
+	// same number.
+	CreditMinor int64
 }
 
 // OrderResult is the order and the instruction the buyer pays with. A
@@ -408,14 +414,35 @@ func (s *Service) createOrder(
 		end := time.Now().Add(time.Duration(quote.TrialDays) * 24 * time.Hour)
 		periodEnd = &end
 	}
+	subtotal, discount, tax, total := quote.SubtotalMinor, quote.DiscountMinor, quote.TaxMinor, quote.TotalMinor
+	// An immediate upgrade pays the prorated target price less the unused
+	// time the customer already bought. The credit is an extra discount:
+	// it never exceeds the net price, and total stays
+	// subtotal - discount + tax (tax unchanged), so the invoice's
+	// snapshot still adds up.
+	credit := int64(0)
+	if in.CreditMinor > 0 {
+		credit = in.CreditMinor
+		if ceiling := subtotal - discount; credit > ceiling {
+			credit = ceiling
+		}
+		if credit < 0 {
+			credit = 0
+		}
+		discount += credit
+		total -= credit
+		if total < 0 {
+			total = 0
+		}
+	}
 	expiresAt := time.Now().Add(s.orderTTL(ctx))
 	if in.ExpiresAt != nil {
 		expiresAt = *in.ExpiresAt
 	}
 	return s.Store.CreatePaymentOrder(ctx, store.CreateOrderInput{
 		ProductID: product.ID, PlanID: plan.ID, PriceID: price.ID, Email: email, Kind: kind,
-		Quantity: in.Quantity, SubtotalMinor: quote.SubtotalMinor, DiscountMinor: quote.DiscountMinor,
-		TaxMinor: quote.TaxMinor, TotalMinor: quote.TotalMinor,
+		Quantity: in.Quantity, SubtotalMinor: subtotal, DiscountMinor: discount,
+		TaxMinor: tax, TotalMinor: total, CreditMinor: credit,
 		Currency: settlementCurrency, CurrencyExponent: domain.CurrencyExponent(settlementCurrency),
 		TaxRateBP: taxRate, Provider: providerName, ExpiresAt: expiresAt,
 		Buyer: buyerJSON, Metadata: metaJSON, CreatedByKeyID: in.CreatedByKeyID,
