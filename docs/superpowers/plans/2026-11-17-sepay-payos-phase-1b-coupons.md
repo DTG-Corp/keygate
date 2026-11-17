@@ -2510,3 +2510,83 @@ git commit -m "feat(coupons): quote service with validity, scopes, limits and tr
 ---
 
 <!-- PLAN-CONTINUES -->
+
+---
+
+## Implementation record (module B — backend only)
+
+Appended by the coupons implementer. The plan above is the planner's text, kept
+verbatim; this section records what was executed, what was left out, and where the
+implementation had to depart from the plan. Every command ran in the isolated worktree
+`/tmp/kg-1b-coupons` on branch `feat/phase-1b-coupons`, not in `/tmp/kg-1b` as the steps
+above say.
+
+**Status:** Tasks 1–9 and the backend half of Task 14 are implemented and committed.
+Tasks 10–13 (web plumbing, coupons list, coupon editor, redemption history UI) are
+**skipped by design**: the phase-1b web surface is one later module, so no file under
+`web/` was touched and no i18n keys were added.
+
+| Task | Commit |
+|---|---|
+| 1 — vocabulary + pure engine | `47fd66b` |
+| 2 — coupon store | `5149f47` |
+| 3 — quote service | `f795a84` |
+| 4 — redemption hook | `7718d8a` |
+| 5 — checkout integration | `bdada94` |
+| 6 — consumer API | `a8e079d` |
+| 7–9 — admin CRUD, redemption history, portal validate | `2ac1a4d` |
+| Test traceability for review focus 1–10 | `d025244` |
+
+**Deviations, and why**
+
+1. **The plan is truncated at Task 3** (it ends at `<!-- PLAN-CONTINUES -->` after Task 3
+   Step 6), so Tasks 4–14 have no code blocks. They were built from the task overview,
+   the contract and spec §3.9/§4.9/§6.2–§6.5.
+2. **Handler file names.** The contract names `coupons_admin.go`/`coupons_portal.go`, but
+   the payment handler set is `payments_*` and the contract test refuses an unlisted
+   *payments* handler file. The files are `internal/handler/payments_coupons_admin.go` and
+   `internal/handler/payments_coupons_portal.go`; both are in `paymentSourceFiles`. The
+   contract's binding function names are unchanged.
+3. **One new code.** `PAYMENT_COUPON_CODE_TAKEN` (409) is the admin answer to creating a
+   code that already exists; the spec's proposed table has no entry for it and reusing
+   `PAYMENT_COUPON_INVALID` would report an operator-fixable conflict as a dead code.
+   `UNAUTHORIZED` (401) is pinned too: the portal route answers a session-less request
+   through the shared envelope helper. All eight documented coupon codes and
+   `PAYMENT_TAX_CODE_REQUIRED` are now `emitted: true`.
+4. **Test file names** differ where a file covers two routes:
+   `internal/payment/checkout/coupon_test.go` (not `coupons_test.go`) and
+   `internal/handler/payments_coupons_admin_test.go`, which also holds the portal tests.
+5. **`provider.Buyer` gains two additive fields**, `tax_code` and `request_invoice`
+   (spec §6.2). They are persisted in `orders.buyer` for module C; no provider adapter
+   sends them.
+6. **`cmd/server/main.go` is not modified** (Lead-owned). The wiring is below.
+
+**Wiring the Lead must add to `cmd/server/main.go`**
+
+```go
+// before settleSvc is built
+couponsSvc := coupons.New(db)
+
+// the one settlement hook, fanned out to the modules that need it
+type paidHooks []settlement.PaidHook
+
+func (h paidHooks) AfterPaid(ctx context.Context, order *model.PaymentOrder,
+	lic *model.License, providerName string) {
+	for _, hook := range h {
+		hook.AfterPaid(ctx, order, lic, providerName)
+	}
+}
+settleSvc.PaidHook = paidHooks{couponsSvc} // + invoiceSvc when module C lands
+
+// after checkoutSvc exists
+checkoutSvc.Coupons = couponsSvc // nil here refuses any request carrying coupon_codes
+checkoutSvc.Settler = settleSvc  // nil here refuses to settle a free order
+
+couponsAdminH := &handler.CouponsAdminHandler{Store: db, Checkout: checkoutSvc}
+couponsPortalH := &handler.CouponsPortalHandler{Checkout: checkoutSvc}
+handler.RegisterCouponsAdminRoutes(admin, couponsAdminH)   // inside the admin block
+handler.RegisterCouponsPortalRoutes(portal, couponsPortalH) // inside the portal block
+```
+
+`docs/api-contract.md` still needs the coupon routes, the two 409/401 additions above and
+the `emitted` flips; documentation is the Lead's per the module brief.
