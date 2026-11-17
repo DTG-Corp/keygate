@@ -265,12 +265,23 @@ export interface PayStatus {
   discount_minor?: number
   tax_minor?: number
   tax_rate_bp?: number
+  // Coupons attached to the order, when the public payload includes the
+  // breakdown. Read-only: the pay page never re-prices an order (spec
+  // §3.13).
+  discounts?: CouponDiscount[]
+  // Some handlers return only the applied codes; the pay page shows them
+  // without amounts rather than hiding that a coupon was used.
+  coupon_codes?: string[]
 }
 
 export const checkoutPay = {
   // Public: the order code is the capability, exactly like the Stripe
   // success page's session id. No cookie is sent.
   status: (code: string) => publicGet<PayStatus>(`/pay/${encodeURIComponent(code)}/status`),
+  // Dry-run price for a plan plus coupon codes, before an order exists.
+  // This is the public surface a coupon-aware entry page can use; it
+  // never creates or changes an order.
+  quote: async (input: PaymentQuoteInput) => normaliseCouponQuote(await post<unknown>("/payments/quote", input)),
 }
 
 // ─── Invites (public, token-only) ───
@@ -987,6 +998,974 @@ export const adminPayments = {
   // key names are accepted so a small response-shape change does not
   // blank the panel.
   health: () => get<{ providers?: PaymentHealthRow[]; health?: PaymentHealthRow[] }>("/admin/payments/health"),
+}
+
+// ─── Phase 1b: coupons ───
+// The backend module for coupons was written in parallel with this client,
+// so every payload is read through a normaliser: a field that arrives as
+// `amount` instead of `amount_minor`, a list under `items` instead of
+// `coupons`, or a detail wrapped in `{coupon}` is accepted rather than
+// blanking the page. The canonical shape is the one declared here.
+
+type RawRecord = Record<string, any>
+
+function rawRecord(value: unknown): RawRecord {
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value)
+      return parsed && typeof parsed === "object" ? (parsed as RawRecord) : {}
+    } catch {
+      return {}
+    }
+  }
+  return value && typeof value === "object" ? (value as RawRecord) : {}
+}
+
+function rawString(value: unknown): string {
+  if (typeof value === "string") return value
+  if (value === null || value === undefined) return ""
+  return String(value)
+}
+
+function rawNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return undefined
+}
+
+function rawBool(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback
+}
+
+// pagedRows reads a list envelope whose array name may differ between
+// handlers (`coupons`, `items`, `rows`). The three pagination numbers are
+// passed through so useServerPagination sees the limit the server applied.
+function pagedRows<T>(raw: unknown, keys: string[], normalise: (row: unknown) => T) {
+  const rec = rawRecord(raw)
+  let rows: unknown[] = []
+  for (const key of keys) {
+    if (Array.isArray(rec[key])) {
+      rows = rec[key]
+      break
+    }
+  }
+  if (!rows.length && Array.isArray(raw)) rows = raw
+  return {
+    rows: rows.map(normalise),
+    total: rawNumber(rec.total) ?? rows.length,
+    limit: rawNumber(rec.limit) ?? rows.length,
+    offset: rawNumber(rec.offset) ?? 0,
+  }
+}
+
+export interface CouponScope {
+  scope_type: "product" | "plan" | string
+  scope_id: string
+}
+
+export interface CouponStats {
+  count: number
+  amount_minor: number
+}
+
+export interface Coupon {
+  id: string
+  code: string
+  description: string
+  type: string
+  value: number
+  trial_days: number
+  currency?: string
+  stack_group: string
+  stackable: boolean
+  priority: number
+  assigned_email: string
+  max_redemptions: number
+  redeemed_count: number
+  per_customer_limit: number
+  valid_from?: string
+  valid_to?: string
+  active: boolean
+  created_at: string
+  updated_at: string
+  // Included by the list/detail handler when the backend has the scope
+  // rows at hand. Absent means "not returned", not "no scopes".
+  scopes?: CouponScope[]
+  stats?: CouponStats
+}
+
+export interface CouponInput {
+  code: string
+  description: string
+  type: "percent" | "fixed" | "trial"
+  value: number
+  trial_days: number
+  currency: string
+  stack_group: "general" | "campaign" | "private"
+  stackable: boolean
+  priority: number
+  assigned_email: string
+  max_redemptions: number
+  per_customer_limit: number
+  valid_from: string | null
+  valid_to: string | null
+  active: boolean
+  scopes: CouponScope[]
+}
+
+export interface CouponDiscount {
+  coupon_id?: string
+  code: string
+  type: string
+  value?: number
+  amount_minor: number
+  priority?: number
+  trial_days?: number
+}
+
+export interface CouponQuote {
+  subtotal_minor?: number
+  discount_minor?: number
+  tax_minor?: number
+  total_minor?: number
+  currency?: string
+  currency_exponent?: number
+  discounts: CouponDiscount[]
+  trial_days?: number
+}
+
+export interface CouponRedemptionRow {
+  id: string
+  coupon_id: string
+  coupon_code: string
+  order_id: string
+  order_code: string
+  email: string
+  external_customer_id: string
+  type: string
+  amount_minor: number
+  trial_days: number
+  currency: string
+  currency_exponent: number
+  created_at: string
+}
+
+function normaliseScopes(value: unknown): CouponScope[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((scope) => {
+      const rec = rawRecord(scope)
+      return { scope_type: rawString(rec.scope_type), scope_id: rawString(rec.scope_id) }
+    })
+    .filter((scope) => scope.scope_type !== "" && scope.scope_id !== "")
+}
+
+function normaliseCouponStats(value: unknown): CouponStats | undefined {
+  const rec = rawRecord(value)
+  if (Object.keys(rec).length === 0) return undefined
+  return {
+    count: rawNumber(rec.count) ?? rawNumber(rec.redeemed_count) ?? 0,
+    amount_minor: rawNumber(rec.amount_minor) ?? rawNumber(rec.total_minor) ?? 0,
+  }
+}
+
+function normaliseCoupon(value: unknown): Coupon {
+  const rec = rawRecord(value)
+  const stats = normaliseCouponStats(rec.stats ?? rec.usage)
+  return {
+    id: rawString(rec.id),
+    code: rawString(rec.code),
+    description: rawString(rec.description),
+    type: rawString(rec.type) || "percent",
+    value: rawNumber(rec.value) ?? 0,
+    trial_days: rawNumber(rec.trial_days) ?? 0,
+    currency: rawString(rec.currency) || undefined,
+    stack_group: rawString(rec.stack_group) || "general",
+    stackable: rawBool(rec.stackable, true),
+    priority: rawNumber(rec.priority) ?? 100,
+    assigned_email: rawString(rec.assigned_email),
+    max_redemptions: rawNumber(rec.max_redemptions) ?? 0,
+    redeemed_count: rawNumber(rec.redeemed_count) ?? stats?.count ?? 0,
+    per_customer_limit: rawNumber(rec.per_customer_limit) ?? 0,
+    valid_from: rawString(rec.valid_from) || undefined,
+    valid_to: rawString(rec.valid_to) || undefined,
+    active: rawBool(rec.active, true),
+    created_at: rawString(rec.created_at),
+    updated_at: rawString(rec.updated_at),
+    scopes: Array.isArray(rec.scopes) ? normaliseScopes(rec.scopes) : undefined,
+    stats,
+  }
+}
+
+function normaliseCouponDetail(value: unknown): Coupon {
+  const rec = rawRecord(value)
+  const base = rawRecord(rec.coupon ?? value)
+  const coupon = normaliseCoupon(base)
+  const scopes = rec.scopes ?? base.scopes
+  if (Array.isArray(scopes)) coupon.scopes = normaliseScopes(scopes)
+  coupon.stats = normaliseCouponStats(rec.stats ?? base.stats ?? rec.usage) ?? coupon.stats
+  return coupon
+}
+
+function quoteMoney(rec: RawRecord, name: string): number | undefined {
+  return rawNumber(rec[`${name}_minor`]) ?? rawNumber(rec[name]) ?? rawNumber(rec[`${name}_amount`])
+}
+
+function normaliseCouponQuote(value: unknown): CouponQuote {
+  const rec = rawRecord(rawRecord(value).quote ?? value)
+  const discountRows = rec.discounts ?? rec.applied ?? rec.coupon_discounts
+  const discounts: CouponDiscount[] = (Array.isArray(discountRows) ? discountRows : [])
+    .map((entry) => {
+      const row = rawRecord(entry)
+      return {
+        coupon_id: rawString(row.coupon_id) || undefined,
+        code: rawString(row.code ?? row.coupon_code),
+        type: rawString(row.type),
+        value: rawNumber(row.value),
+        amount_minor: rawNumber(row.amount_minor) ?? rawNumber(row.amount) ?? 0,
+        priority: rawNumber(row.priority),
+        trial_days: rawNumber(row.trial_days),
+      }
+    })
+    .filter((discount) => discount.code !== "")
+  return {
+    subtotal_minor: quoteMoney(rec, "subtotal"),
+    discount_minor: quoteMoney(rec, "discount"),
+    tax_minor: quoteMoney(rec, "tax"),
+    total_minor: quoteMoney(rec, "total") ?? quoteMoney(rec, "amount"),
+    currency: rawString(rec.currency) || undefined,
+    currency_exponent: rawNumber(rec.currency_exponent) ?? rawNumber(rec.currency_exp),
+    discounts,
+    trial_days: rawNumber(rec.trial_days),
+  }
+}
+
+export interface CouponPreviewInput {
+  coupon_id?: string
+  code?: string
+  codes?: string[]
+  plan_id: string
+  quantity?: number
+  subtotal_minor?: number
+  currency?: string
+  email?: string
+  // Unsaved editor state. A handler that prices a definition before it
+  // is stored can read it; one that only accepts coupon_id ignores it.
+  definition?: Partial<CouponInput>
+}
+
+export class CouponPreviewUnavailableError extends Error {}
+
+// The admin preview route is not pinned by the phase-1b contract, so the
+// client tries the spellings a handler is likely to mount and remembers
+// the one that answered. A 404/405 means "wrong path", not "bad coupon";
+// a 4xx with a payment code is surfaced so the editor can show it.
+const COUPON_PREVIEW_PATHS = ["/admin/coupons/preview", "/admin/coupons/quote", "/admin/payments/coupons/preview"]
+let couponPreviewPath: string | null | undefined
+
+function isMissingRoute(err: unknown): boolean {
+  const code = errorCode(err)
+  const message = err instanceof Error ? err.message : ""
+  return (!code || code === "NOT_FOUND") && /(404|405|not found|method not allowed)/i.test(message)
+}
+
+export const adminCoupons = {
+  list: async (params?: {
+    q?: string
+    active?: boolean
+    type?: string
+    stack_group?: string
+    scope_type?: string
+    limit?: number
+    offset?: number
+  }): Promise<Paged<{ coupons: Coupon[] }>> => {
+    const query = listQuery({
+      q: params?.q,
+      active: params?.active === undefined ? undefined : String(params.active),
+      type: params?.type,
+      stack_group: params?.stack_group,
+      scope_type: params?.scope_type,
+      limit: params?.limit,
+      offset: params?.offset,
+    })
+    const raw = await get<unknown>(`/admin/coupons?${query}`)
+    const page = pagedRows(raw, ["coupons", "items", "rows"], normaliseCoupon)
+    return {
+      coupons: page.rows,
+      total: page.total,
+      limit: page.limit,
+      offset: page.offset,
+    }
+  },
+  get: async (id: string) => normaliseCouponDetail(await get<unknown>(`/admin/coupons/${encodeURIComponent(id)}`)),
+  create: async (input: CouponInput) => normaliseCouponDetail(await post<unknown>("/admin/coupons", input)),
+  update: async (id: string, input: CouponInput) =>
+    normaliseCouponDetail(await put<unknown>(`/admin/coupons/${encodeURIComponent(id)}`, input)),
+  // The route deletes an unused coupon and archives a redeemed one; the
+  // response says which happened so the list can word the toast.
+  remove: async (id: string) =>
+    (await del<unknown>(`/admin/coupons/${encodeURIComponent(id)}`)) as
+      | {
+          archived?: boolean
+          deleted?: boolean
+        }
+      | undefined,
+  redemptions: async (
+    id: string,
+    params?: { limit?: number; offset?: number },
+  ): Promise<Paged<{ redemptions: CouponRedemptionRow[] }>> => {
+    const raw = await get<unknown>(`/admin/coupons/${encodeURIComponent(id)}/redemptions?${listQuery(params)}`)
+    const page = pagedRows(raw, ["redemptions", "items", "rows"], normaliseRedemption)
+    return { redemptions: page.rows, total: page.total, limit: page.limit, offset: page.offset }
+  },
+  // Live quote preview for the editor. Throws CouponPreviewUnavailableError
+  // when no preview route is mounted, which the editor renders as a
+  // clearly marked local estimate instead of an error.
+  preview: async (input: CouponPreviewInput): Promise<CouponQuote> => {
+    if (couponPreviewPath === null) {
+      throw new CouponPreviewUnavailableError("coupon preview is not available on this server")
+    }
+    const candidates = couponPreviewPath ? [couponPreviewPath] : COUPON_PREVIEW_PATHS
+    const body = {
+      coupon_id: input.coupon_id,
+      code: input.code,
+      codes: input.codes,
+      plan_id: input.plan_id,
+      quantity: input.quantity ?? 1,
+      subtotal_minor: input.subtotal_minor,
+      currency: input.currency,
+      email: input.email,
+      coupon: input.definition,
+    }
+    for (const path of candidates) {
+      try {
+        const raw = await post<unknown>(path, body)
+        couponPreviewPath = path
+        return normaliseCouponQuote(raw)
+      } catch (err) {
+        if (isMissingRoute(err)) continue
+        throw err
+      }
+    }
+    couponPreviewPath = null
+    throw new CouponPreviewUnavailableError("coupon preview is not available on this server")
+  },
+}
+
+function normaliseRedemption(value: unknown): CouponRedemptionRow {
+  const rec = rawRecord(value)
+  return {
+    id: rawString(rec.id),
+    coupon_id: rawString(rec.coupon_id),
+    coupon_code: rawString(rec.coupon_code),
+    order_id: rawString(rec.order_id),
+    order_code: rawString(rec.order_code),
+    email: rawString(rec.email),
+    external_customer_id: rawString(rec.external_customer_id),
+    type: rawString(rec.type),
+    amount_minor: rawNumber(rec.amount_minor) ?? 0,
+    trial_days: rawNumber(rec.trial_days) ?? 0,
+    currency: rawString(rec.currency) || "VND",
+    currency_exponent: rawNumber(rec.currency_exponent) ?? rawNumber(rec.currency_exp) ?? 0,
+    created_at: rawString(rec.created_at),
+  }
+}
+
+export interface RedemptionFilter {
+  coupon?: string
+  email?: string
+  from?: string
+  to?: string
+  limit?: number
+  offset?: number
+}
+
+export const adminRedemptions = {
+  list: async (params?: RedemptionFilter): Promise<Paged<{ redemptions: CouponRedemptionRow[] }>> => {
+    const raw = await get<unknown>(
+      `/admin/payments/redemptions?${listQuery({
+        coupon: params?.coupon,
+        email: params?.email,
+        from: params?.from,
+        to: params?.to,
+        limit: params?.limit,
+        offset: params?.offset,
+      })}`,
+    )
+    const page = pagedRows(raw, ["redemptions", "items", "rows"], normaliseRedemption)
+    return { redemptions: page.rows, total: page.total, limit: page.limit, offset: page.offset }
+  },
+  csv: (params?: RedemptionFilter) =>
+    requestFile(`/admin/payments/redemptions?${listQuery({ ...params, format: "csv" })}`),
+}
+
+// ─── Phase 1b: invoices ───
+
+export interface InvoiceBuyer {
+  name: string
+  company_name: string
+  tax_code: string
+  address: string
+  email: string
+  phone: string
+  request_invoice?: boolean
+}
+
+export interface InvoiceLineItem {
+  description: string
+  plan_id?: string
+  quantity: number
+  unit_amount_minor: number
+  amount_minor: number
+  tax_rate_bp: number
+}
+
+export interface PaymentInvoice {
+  id: string
+  number: string
+  order_id: string
+  license_id?: string
+  status: string
+  buyer: InvoiceBuyer
+  items: InvoiceLineItem[]
+  subtotal_minor: number
+  discount_minor: number
+  tax_minor: number
+  total_minor: number
+  currency: string
+  currency_exponent: number
+  e_invoice_provider?: string
+  e_invoice_ref?: string
+  e_invoice_status?: string
+  pdf_url?: string
+  issued_at?: string
+  created_at: string
+  updated_at: string
+  // The invoice row freezes the buyer, not the seller; the admin detail
+  // renders a seller block only if the handler includes the current
+  // settings snapshot.
+  seller?: InvoiceBuyer
+}
+
+function normaliseBuyer(value: unknown): InvoiceBuyer {
+  const rec = rawRecord(value)
+  return {
+    name: rawString(rec.name ?? rec.buyer_name),
+    company_name: rawString(rec.company_name ?? rec.company),
+    tax_code: rawString(rec.tax_code ?? rec.tax_id),
+    address: rawString(rec.address),
+    email: rawString(rec.email),
+    phone: rawString(rec.phone),
+    request_invoice: rawBool(rec.request_invoice, false),
+  }
+}
+
+function normaliseInvoiceItem(value: unknown): InvoiceLineItem {
+  const rec = rawRecord(value)
+  return {
+    description: rawString(rec.description),
+    plan_id: rawString(rec.plan_id) || undefined,
+    quantity: rawNumber(rec.quantity) ?? 1,
+    unit_amount_minor: rawNumber(rec.unit_amount_minor) ?? 0,
+    amount_minor: rawNumber(rec.amount_minor) ?? 0,
+    tax_rate_bp: rawNumber(rec.tax_rate_bp) ?? 0,
+  }
+}
+
+function normaliseInvoice(value: unknown): PaymentInvoice {
+  const rec = rawRecord(rawRecord(value).invoice ?? value)
+  return {
+    id: rawString(rec.id),
+    number: rawString(rec.number),
+    order_id: rawString(rec.order_id),
+    license_id: rawString(rec.license_id) || undefined,
+    status: rawString(rec.status),
+    buyer: normaliseBuyer(rec.buyer),
+    items: Array.isArray(rec.items) ? rec.items.map(normaliseInvoiceItem) : [],
+    subtotal_minor: rawNumber(rec.subtotal_minor) ?? 0,
+    discount_minor: rawNumber(rec.discount_minor) ?? 0,
+    tax_minor: rawNumber(rec.tax_minor) ?? 0,
+    total_minor: rawNumber(rec.total_minor) ?? 0,
+    currency: rawString(rec.currency) || "VND",
+    currency_exponent: rawNumber(rec.currency_exponent) ?? rawNumber(rec.currency_exp) ?? 0,
+    e_invoice_provider: rawString(rec.e_invoice_provider) || undefined,
+    e_invoice_ref: rawString(rec.e_invoice_ref) || undefined,
+    e_invoice_status: rawString(rec.e_invoice_status) || undefined,
+    pdf_url: rawString(rec.pdf_url) || undefined,
+    issued_at: rawString(rec.issued_at) || undefined,
+    created_at: rawString(rec.created_at),
+    updated_at: rawString(rec.updated_at),
+    seller: rec.seller ? normaliseBuyer(rec.seller) : undefined,
+  }
+}
+
+export interface InvoiceFilter {
+  status?: string
+  license_id?: string
+  order_id?: string
+  number?: string
+  product_id?: string
+  from?: string
+  to?: string
+  limit?: number
+  offset?: number
+}
+
+export const adminInvoices = {
+  list: async (params?: InvoiceFilter): Promise<Paged<{ invoices: PaymentInvoice[] }>> => {
+    const raw = await get<unknown>(
+      `/admin/payments/invoices?${listQuery({
+        status: params?.status,
+        license_id: params?.license_id,
+        order_id: params?.order_id,
+        number: params?.number,
+        product_id: params?.product_id,
+        from: params?.from,
+        to: params?.to,
+        limit: params?.limit,
+        offset: params?.offset,
+      })}`,
+    )
+    const page = pagedRows(raw, ["invoices", "items", "rows"], normaliseInvoice)
+    return { invoices: page.rows, total: page.total, limit: page.limit, offset: page.offset }
+  },
+  get: async (id: string) => normaliseInvoice(await get<unknown>(`/admin/payments/invoices/${encodeURIComponent(id)}`)),
+  issue: async (id: string) =>
+    normaliseInvoice(await post<unknown>(`/admin/payments/invoices/${encodeURIComponent(id)}/issue`)),
+  void: async (id: string, reason: string) =>
+    normaliseInvoice(await post<unknown>(`/admin/payments/invoices/${encodeURIComponent(id)}/void`, { reason })),
+  pdf: (id: string) => requestFile(`/admin/payments/invoices/${encodeURIComponent(id)}/pdf`),
+}
+
+// ─── Phase 1b: reports ───
+
+export interface RevenueReportRow {
+  period?: string
+  provider?: string
+  plan_id?: string
+  plan_name?: string
+  product_id?: string
+  product_name?: string
+  currency: string
+  currency_exponent: number
+  orders: number
+  subtotal_minor: number
+  discount_minor: number
+  tax_minor: number
+  total_minor: number
+}
+
+export interface RevenueReportTotals {
+  currency: string
+  currency_exponent: number
+  orders: number
+  subtotal_minor: number
+  discount_minor: number
+  tax_minor: number
+  total_minor: number
+}
+
+export interface ReconciliationReportRow {
+  day: string
+  provider: string
+  currency: string
+  orders_count: number
+  transactions_count: number
+  orders_minor: number
+  transactions_minor: number
+  drift_minor: number
+}
+
+export interface ReconciliationReportTotals {
+  currency: string
+  orders_count: number
+  transactions_count: number
+  orders_minor: number
+  transactions_minor: number
+  drift_minor: number
+}
+
+export interface VatReportRow {
+  period: string
+  currency: string
+  currency_exponent: number
+  tax_rate_bp: number
+  orders: number
+  taxable_base_minor: number
+  tax_minor: number
+  total_minor: number
+}
+
+export interface VatReportTotals {
+  currency: string
+  orders: number
+  taxable_base_minor: number
+  tax_minor: number
+  total_minor: number
+}
+
+export interface ReportWindow {
+  from: string
+  to: string
+  timezone: string
+}
+
+export interface RevenueReport extends ReportWindow {
+  group_by: string
+  period: string
+  rows: RevenueReportRow[]
+  totals: RevenueReportTotals[]
+}
+
+export interface ReconciliationReport extends ReportWindow {
+  rows: ReconciliationReportRow[]
+  totals: ReconciliationReportTotals[]
+  drift_minor: number
+}
+
+export interface VatReport extends ReportWindow {
+  rows: VatReportRow[]
+  totals: VatReportTotals[]
+}
+
+export interface ReportFilter {
+  from?: string
+  to?: string
+  group_by?: string
+  period?: string
+  provider?: string
+  product_id?: string
+  plan_id?: string
+}
+
+export type ReportName = "revenue" | "reconciliation" | "vat"
+
+function reportQuery(params?: ReportFilter) {
+  return listQuery({
+    from: params?.from,
+    to: params?.to,
+    group_by: params?.group_by,
+    period: params?.period,
+    provider: params?.provider,
+    product_id: params?.product_id,
+    plan_id: params?.plan_id,
+  })
+}
+
+export const adminReports = {
+  revenue: async (params?: ReportFilter): Promise<RevenueReport> => {
+    const raw = rawRecord(await get<unknown>(`/admin/payments/reports/revenue?${reportQuery(params)}`))
+    return {
+      from: rawString(raw.from),
+      to: rawString(raw.to),
+      timezone: rawString(raw.timezone) || "Asia/Ho_Chi_Minh",
+      group_by: rawString(raw.group_by) || "period",
+      period: rawString(raw.period) || "day",
+      rows: Array.isArray(raw.rows) ? (raw.rows as RevenueReportRow[]) : [],
+      totals: Array.isArray(raw.totals) ? (raw.totals as RevenueReportTotals[]) : [],
+    }
+  },
+  reconciliation: async (params?: ReportFilter): Promise<ReconciliationReport> => {
+    const raw = rawRecord(await get<unknown>(`/admin/payments/reports/reconciliation?${reportQuery(params)}`))
+    return {
+      from: rawString(raw.from),
+      to: rawString(raw.to),
+      timezone: rawString(raw.timezone) || "Asia/Ho_Chi_Minh",
+      rows: Array.isArray(raw.rows) ? (raw.rows as ReconciliationReportRow[]) : [],
+      totals: Array.isArray(raw.totals) ? (raw.totals as ReconciliationReportTotals[]) : [],
+      drift_minor: rawNumber(raw.drift_minor) ?? 0,
+    }
+  },
+  vat: async (params?: ReportFilter): Promise<VatReport> => {
+    const raw = rawRecord(await get<unknown>(`/admin/payments/reports/vat?${reportQuery(params)}`))
+    return {
+      from: rawString(raw.from),
+      to: rawString(raw.to),
+      timezone: rawString(raw.timezone) || "Asia/Ho_Chi_Minh",
+      rows: Array.isArray(raw.rows) ? (raw.rows as VatReportRow[]) : [],
+      totals: Array.isArray(raw.totals) ? (raw.totals as VatReportTotals[]) : [],
+    }
+  },
+  csv: (report: ReportName, params?: ReportFilter) =>
+    requestFile(`/admin/payments/reports/${report}?${listQuery({ ...params, format: "csv" })}`),
+}
+
+// ─── Phase 1b: portal orders and invoices ───
+
+export interface PaymentBankAccount {
+  bank_name: string
+  bank_bin?: string
+  account_no: string
+  account_name: string
+}
+
+export interface PaymentInstructions {
+  provider?: string
+  provider_ref?: string
+  qr_payload?: string
+  qr_image_url?: string
+  checkout_url?: string
+  va_number?: string
+  description?: string
+  expires_at?: string
+  bank_account?: PaymentBankAccount
+}
+
+export interface PortalPaymentOrder {
+  id?: string
+  code: string
+  kind: string
+  status: string
+  provider: string
+  product_id?: string
+  plan_id?: string
+  plan_name?: string
+  product_name?: string
+  quantity?: number
+  subtotal_minor?: number
+  discount_minor?: number
+  tax_minor?: number
+  total_minor: number
+  currency: string
+  currency_exponent: number
+  email?: string
+  expires_at?: string
+  paid_at?: string
+  created_at?: string
+  license_id?: string
+  invoice_id?: string
+  payment?: PaymentInstructions
+}
+
+function normaliseBankAccount(value: unknown): PaymentBankAccount | undefined {
+  const rec = rawRecord(value)
+  if (Object.keys(rec).length === 0) return undefined
+  const accountNo = rawString(rec.account_no ?? rec.account_number)
+  const bankName = rawString(rec.bank_name ?? rec.bank)
+  if (!accountNo && !bankName) return undefined
+  return {
+    bank_name: bankName,
+    bank_bin: rawString(rec.bank_bin) || undefined,
+    account_no: accountNo,
+    account_name: rawString(rec.account_name),
+  }
+}
+
+function normalisePayment(value: unknown): PaymentInstructions {
+  const rec = rawRecord(value)
+  return {
+    provider: rawString(rec.provider) || undefined,
+    provider_ref: rawString(rec.provider_ref) || undefined,
+    qr_payload: rawString(rec.qr_payload) || undefined,
+    qr_image_url: rawString(rec.qr_image_url) || undefined,
+    checkout_url: rawString(rec.checkout_url) || undefined,
+    va_number: rawString(rec.va_number) || undefined,
+    description: rawString(rec.description) || undefined,
+    expires_at: rawString(rec.expires_at) || undefined,
+    bank_account: normaliseBankAccount(rec.bank_account ?? rec.bank),
+  }
+}
+
+function normalisePortalOrder(value: unknown): PortalPaymentOrder {
+  const rec = rawRecord(value)
+  return {
+    id: rawString(rec.id) || undefined,
+    code: rawString(rec.code),
+    kind: rawString(rec.kind) || "new",
+    status: rawString(rec.status),
+    provider: rawString(rec.provider),
+    product_id: rawString(rec.product_id) || undefined,
+    plan_id: rawString(rec.plan_id) || undefined,
+    plan_name: rawString(rec.plan_name) || undefined,
+    product_name: rawString(rec.product_name) || undefined,
+    quantity: rawNumber(rec.quantity),
+    subtotal_minor: rawNumber(rec.subtotal_minor),
+    discount_minor: rawNumber(rec.discount_minor),
+    tax_minor: rawNumber(rec.tax_minor),
+    total_minor: rawNumber(rec.total_minor) ?? 0,
+    currency: rawString(rec.currency) || "VND",
+    currency_exponent: rawNumber(rec.currency_exponent) ?? rawNumber(rec.currency_exp) ?? 0,
+    email: rawString(rec.email) || undefined,
+    expires_at: rawString(rec.expires_at) || undefined,
+    paid_at: rawString(rec.paid_at) || undefined,
+    created_at: rawString(rec.created_at) || undefined,
+    license_id: rawString(rec.license_id) || undefined,
+    invoice_id: rawString(rec.invoice_id) || undefined,
+    payment: undefined,
+  }
+}
+
+function normalisePortalOrderDetail(value: unknown): {
+  order: PortalPaymentOrder
+  payment: PaymentInstructions
+} {
+  const rec = rawRecord(value)
+  const orderRaw = rawRecord(rec.order ?? value)
+  const order = normalisePortalOrder(orderRaw)
+  const payment = normalisePayment(rec.payment ?? orderRaw.payment ?? rec.instructions)
+  // Some handlers flatten the attempt into the order row. Fill only the
+  // fields the dedicated payment block did not answer.
+  const fallback = normalisePayment(orderRaw)
+  const merged: PaymentInstructions = {
+    provider: payment.provider ?? fallback.provider,
+    provider_ref: payment.provider_ref ?? fallback.provider_ref,
+    qr_payload: payment.qr_payload ?? fallback.qr_payload,
+    qr_image_url: payment.qr_image_url ?? fallback.qr_image_url,
+    checkout_url: payment.checkout_url ?? fallback.checkout_url,
+    va_number: payment.va_number ?? fallback.va_number,
+    description: payment.description ?? fallback.description,
+    expires_at: payment.expires_at ?? fallback.expires_at ?? order.expires_at,
+    bank_account: payment.bank_account ?? fallback.bank_account,
+  }
+  order.payment = merged
+  return { order, payment: merged }
+}
+
+export const portalPayments = {
+  orders: async (params?: {
+    status?: string
+    limit?: number
+    offset?: number
+  }): Promise<Paged<{ orders: PortalPaymentOrder[] }>> => {
+    const raw = await get<unknown>(`/portal/payments/orders?${listQuery(params)}`)
+    const page = pagedRows(raw, ["orders", "items", "rows"], normalisePortalOrder)
+    return { orders: page.rows, total: page.total, limit: page.limit, offset: page.offset }
+  },
+  order: async (code: string) =>
+    normalisePortalOrderDetail(await get<unknown>(`/portal/payments/orders/${encodeURIComponent(code)}`)),
+  // Re-issues/refreshes the payment instruction. The backend refuses a
+  // terminal or expiry-passed order with PAYMENT_ORDER_NOT_PAYABLE.
+  pay: async (code: string) =>
+    normalisePortalOrderDetail(await post<unknown>(`/portal/payments/orders/${encodeURIComponent(code)}/pay`)),
+  cancel: async (code: string) =>
+    normalisePortalOrderDetail(await post<unknown>(`/portal/payments/orders/${encodeURIComponent(code)}/cancel`)),
+}
+
+export const portalInvoices = {
+  list: async (params?: { limit?: number; offset?: number }): Promise<Paged<{ invoices: PaymentInvoice[] }>> => {
+    const raw = await get<unknown>(`/portal/invoices?${listQuery(params)}`)
+    const page = pagedRows(raw, ["invoices", "items", "rows"], normaliseInvoice)
+    return { invoices: page.rows, total: page.total, limit: page.limit, offset: page.offset }
+  },
+  // The full document is on the detail route. If a deployment mounts
+  // only the list route, fall back to the row the list already returns so
+  // the detail page still opens (without line items).
+  get: async (id: string) => {
+    try {
+      return normaliseInvoice(await get<unknown>(`/portal/invoices/${encodeURIComponent(id)}`))
+    } catch (err) {
+      if (errorCode(err) !== "NOT_FOUND") throw err
+      const list = await portalInvoices.list({ limit: 200 })
+      const row = list.invoices.find((invoice) => invoice.id === id)
+      if (!row) throw err
+      return row
+    }
+  },
+  pdf: (id: string) => requestFile(`/portal/invoices/${encodeURIComponent(id)}?format=pdf`),
+}
+
+export interface BillingProfileInput {
+  name: string
+  company_name: string
+  tax_code: string
+  address: string
+  email: string
+  phone: string
+  request_invoice: boolean
+}
+
+function normaliseBillingProfile(value: unknown): InvoiceBuyer {
+  const rec = rawRecord(value)
+  return normaliseBuyer(rec.buyer ?? rawRecord(rec.profile).buyer ?? rec.profile ?? rec)
+}
+
+export const portalBilling = {
+  get: async () => normaliseBillingProfile(await get<unknown>("/portal/billing-profile")),
+  update: async (buyer: BillingProfileInput) =>
+    normaliseBillingProfile(await put<unknown>("/portal/billing-profile", buyer)),
+}
+
+// ─── Phase 1b: public coupon quote ───
+// Dry-run pricing for `{plan_id, quantity, email, coupon_codes[]}`. The
+// pay page never re-prices an order, but the quote is what a coupon-aware
+// entry surface needs before an order exists (spec §6.1).
+export interface PaymentQuoteInput {
+  plan_id: string
+  quantity?: number
+  email?: string
+  coupon_codes?: string[]
+  ignore_invalid_coupons?: boolean
+}
+
+// ─── File downloads (invoice PDF, report/redemption CSV) ───
+
+export interface DownloadedFile {
+  blob: Blob
+  filename?: string
+}
+
+function filenameFromDisposition(value: string | null): string | undefined {
+  if (!value) return undefined
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(value)
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded[1])
+    } catch {
+      return encoded[1]
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(value)
+  return plain?.[1]
+}
+
+// requestFile is the blob counterpart of request: it keeps the session
+// renewal behaviour and turns a JSON error body into the same Error the
+// pages already know how to translate.
+async function requestFile(path: string, opts?: RequestInit, retried = false): Promise<DownloadedFile> {
+  let res: Response
+  try {
+    res = await fetch(BASE + path, { credentials: "include", ...opts })
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e)
+    throw new ServiceUnavailableError(`Network error: ${reason}. Is the server reachable?`)
+  }
+
+  if (res.status === 401 && !retried) {
+    const outcome = await refreshSession()
+    if (outcome === "ok") return requestFile(path, opts, true)
+    if (outcome === "unavailable") {
+      throw new ServiceUnavailableError("Could not renew your session right now. Check your connection and try again.")
+    }
+  }
+  if (res.status === 401) {
+    if (!window.location.pathname.startsWith("/login")) window.location.href = "/login"
+    throw new Error("Session expired")
+  }
+  if (!res.ok) {
+    const raw = await res.text()
+    let json: any = null
+    try {
+      json = raw ? JSON.parse(raw) : null
+    } catch {
+      json = null
+    }
+    const msg =
+      json?.error?.message ||
+      (raw && raw.length < 200 ? raw : null) ||
+      `Request failed (${res.status}${res.statusText ? ` ${res.statusText}` : ""})`
+    const err = res.status === 429 || res.status >= 500 ? new ServiceUnavailableError(msg) : new Error(msg)
+    throw Object.assign(err, {
+      code: typeof json?.error?.code === "string" ? json.error.code : undefined,
+      details: json?.error?.details && typeof json.error.details === "object" ? json.error.details : undefined,
+    })
+  }
+  return {
+    blob: await res.blob(),
+    filename: filenameFromDisposition(res.headers.get("Content-Disposition")),
+  }
 }
 
 // ─── Types ───
