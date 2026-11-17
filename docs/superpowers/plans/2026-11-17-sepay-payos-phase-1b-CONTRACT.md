@@ -169,3 +169,57 @@ Dependencies: consumes invoice/coupon packages from B and C.
    foundation) instead of making it — Lead performs those edits.
 5. Finish with a report: files created/modified, wiring snippet, test/verification evidence,
    deferred items, and any interface changes future modules must know.
+
+## Implementation record (post-merge, 2026-11-17)
+
+All four modules shipped and were merged into `feat/sepay-payos-phase-1b`:
+A billing engine, B coupons + checkout pricing, C invoices/PDF/reports, D portal/events/docs.
+The surface below supersedes the contract where the shipped code chose differently.
+
+### Modules as shipped
+- A (`internal/billing`, `internal/store/billing.go`, `internal/service/email_renewal.go`):
+  `Deps{Store, Checkout, Email, Webhook, Logger, BaseURL, Now}`, `New`, `Run(ctx)`, `RunOnce`,
+  `RunOnceAt`, `EndGraceExpiredLicense`. Renewal orders are kind `renewal` with
+  `PeriodStart/PeriodEnd` and `ExpiresAt = period_end + grace`; reminder claim tags are
+  period-scoped (`<rung>:<period_end RFC3339>`), because a bare tag would fire once per licence
+  ever. Lead patches: `plans.trial_conversion_plan_id` was **not** added (trial conversion uses
+  the licence's current plan); explicit `CreditMinor`/proration arrives with the upgrade slice.
+- B (`internal/payment/coupons`, `internal/store/coupons.go`, checkout `coupon.go`/`buyer.go`):
+  `coupons.New(st)`, `Quote`, `PortalValidate`, `RedeemForOrder`, `AfterPaid` (PaidHook),
+  `checkout.Service{+Coupons,+Settler}`, `CreateOrderInput{+CouponCodes,+IgnoreInvalidCoupons,
+  +ExternalCustomerID}`, `OrderResult{+Discounts}`, `PreviewQuote`. Trial coupons settle a
+  zero-total order at creation. Codes `PAYMENT_COUPON_CODE_TAKEN` (409) and `UNAUTHORIZED` (401)
+  were added to the vocabulary.
+- C (`internal/payment/invoice`, `internal/store/{invoices,reports}.go`,
+  `internal/handler/payments_invoices_admin.go`, `payments_api_invoices.go`,
+  `payments_reports_admin.go`): `invoice.New(store, storage, logger)`, `CreateForOrder`, `Get`,
+  `PDF` (3 values), `Issue`, `Void`, `List(ListFilter)`, `AfterPaid` (PaidHook). PDF is typed
+  pure-Go fpdf v0.9.0 with embedded OFL Noto Sans. Invoices open `issued` (manual queue only when
+  `einvoice_provider` is set → `pending_issue`).
+- D (`internal/handler/payments_portal.go`, `internal/service/webhook_events_1b.go`,
+  `internal/payment/reconcile` expiry claim): portal orders/invoices/billing profile, emitters
+  `OrderExpired`/`OrderCanceled`/`PaymentRefunded`, docs (`api-contract.md`, `openapi.yaml`,
+  runbook). Handler type `PortalPaymentsHandler` (alias `PortalPaymentHandler`), factory
+  `NewPortalPaymentsHandler(store, payer, PortalInvoiceFuncs)`.
+
+### Decisions the Lead fixed at integration
+- `settlement.Service.PaidHook` stays a single field; `internal/payment/hooks.Chain` fans out to
+  invoice creation and coupon redemption in `cmd/server/main.go`. One hook panicking or failing
+  does not stop the other.
+- Coupon/invoice buyer VAT fields (`company_name`, `tax_code`, `request_invoice`) were added to
+  `provider.Buyer`; checkout rejects `request_invoice` without a 10–13 digit tax code with
+  `PAYMENT_TAX_CODE_REQUIRED`.
+- `settingsWritable` gained `renewal_lead_days`, `coupon_max_stack`, `invoice_seller_name`,
+  `invoice_seller_tax_code`, `invoice_seller_address`, `invoice_seller_email`, `invoice_note`,
+  `invoice_auto_issue` (bool), `einvoice_provider`.
+- P2 sweep split: the three Stripe-era mail sweeps exclude every VN-rail subscription
+  (`notBillingRailSQL`), but the grace sweep excludes only subscriptions the engine still drives
+  (`active|trialing|past_due`), so a closed (cancel-at-period-end / lapsed trial) VN subscription
+  still hands its licence back to the platform sweep and expires. `expiryChecker` composes
+  `billingSvc.EndGraceExpiredLicense` first, then the Stripe hook, then the default sweep.
+- `payment_orders.credit_minor` (migration `20261117_05`) carries the prorated upgrade credit;
+  invoice totals keep `subtotal - discount + tax` and print the credit on the upgrade line.
+- Reminder/dunning mail respects the dashboard switches: `renewal_reminder` (pre-expiry + due +
+  grace) and `license_suspended`, via a `MailGate` optional interface on `billing.ReminderSender`.
+- `order.expired` is emitted by the expiry sweep (per-row claim) only; settlement's
+  provider-reported expiry does not emit it (follow-up).
