@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tabloy/keygate/internal/model"
+	"github.com/tabloy/keygate/internal/payment/coupons"
 	"github.com/tabloy/keygate/internal/payment/domain"
 	"github.com/tabloy/keygate/internal/payment/provider"
 	"github.com/tabloy/keygate/internal/payment/providercfg"
@@ -92,6 +93,13 @@ type Service struct {
 	// absolute https return/cancel URLs and phase 1a has no server-side
 	// success/cancel routes, so both point at the SPA checkout pages.
 	BaseURL string
+	// Coupons prices the codes a buyer submits (spec §3.9). It is
+	// optional: a service without it sells at full price, and refuses a
+	// request that carries codes rather than ignoring them.
+	Coupons *coupons.Service
+	// Settler settles an order that has nothing to pay — a trial coupon
+	// makes the order free. Required for a zero-total coupon purchase.
+	Settler Settler
 }
 
 // CreateOrderInput is one checkout request. Quantity must be between 1
@@ -105,6 +113,19 @@ type CreateOrderInput struct {
 	Buyer          provider.Buyer
 	Metadata       map[string]any
 	CreatedByKeyID string
+	// CouponCodes are the codes the buyer submitted, in any case and any
+	// order. IgnoreInvalidCoupons drops the ones that cannot apply
+	// instead of failing the whole request.
+	CouponCodes          []string
+	IgnoreInvalidCoupons bool
+	// ExternalCustomerID is the identity the per-customer coupon limit
+	// counts against when the caller knows one (a signed-in portal
+	// session), falling back to the buyer email.
+	ExternalCustomerID string
+	// quote is the priced result CreateOrder already computed. It is
+	// unexported on purpose: pricing happens exactly once, inside
+	// checkout, and createOrder reuses the number the buyer was shown.
+	quote *coupons.Quote
 }
 
 // OrderResult is the order and the instruction the buyer pays with. A
@@ -138,6 +159,26 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 	if err != nil {
 		return nil, err
 	}
+	quote, err := s.quoteFor(ctx, plan, product, price, email, in)
+	if err != nil {
+		return nil, err
+	}
+	in.quote = quote
+	signature := coupons.CodesSignature(quote.Codes())
+
+	// A coupon that makes the order free is settled at creation: there is
+	// no amount to collect and no payment instruction to wait for. A
+	// retried create gets the order that was already settled back, so a
+	// trial is never granted twice.
+	if zeroTotalNeedsSettlement(quote) {
+		paid, err := s.paidZeroOrder(ctx, plan, email, providerName, in.Quantity, price.ID)
+		if err != nil {
+			return nil, err
+		}
+		if paid != nil {
+			return &OrderResult{Order: paid}, nil
+		}
+	}
 
 	// Reuse this buyer's still-open order for the same purchase. A
 	// retried create must not ask PayOS for a second link for one
@@ -147,6 +188,12 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 	order, latest, err := s.resumableOrder(ctx, plan, email, providerName, in.Quantity, price.ID)
 	if err != nil {
 		return nil, err
+	}
+	if order != nil && coupons.OrderSignature(order) != signature {
+		// The open order was priced with different codes. Reusing it would
+		// charge a price this request never quoted, so it is left for the
+		// expiry sweeper and a fresh order is written.
+		order, latest = nil, nil
 	}
 	created := false
 	if order != nil && latest != nil && (payableAttempt(latest, time.Now()) || latest.Status == domain.AttemptSucceeded) {
@@ -158,6 +205,17 @@ func (s *Service) CreateOrder(ctx context.Context, in CreateOrderInput) (*OrderR
 			return nil, err
 		}
 		created = true
+	}
+
+	// A free order (trial coupon, or a code worth the whole price) never
+	// gets a payment instruction: it is settled here, through the same
+	// settlement service a paid webhook uses, so the licence, the events
+	// and the paid hooks all run exactly as they would for money.
+	if order.TotalMinor == 0 && zeroTotalNeedsSettlement(quote) {
+		if created {
+			s.Webhooks.Dispatch(ctx, product.ID, model.EventOrderCreated, map[string]any{"order": order})
+		}
+		return s.settleZeroTotal(ctx, order, providerName)
 	}
 
 	// The attempt never outlives its order: a reused order is up to a
@@ -220,20 +278,16 @@ func (s *Service) createOrder(
 	ctx context.Context, plan *model.Plan, product *model.Product,
 	price *model.PlanPrice, email, providerName string, in CreateOrderInput,
 ) (*model.PaymentOrder, error) {
-	subtotal, err := orderSubtotal(price.AmountMinor, in.Quantity)
-	if err != nil {
-		return nil, err
+	quote := in.quote
+	if quote == nil {
+		q, err := s.quoteFor(ctx, plan, product, price, email, in)
+		if err != nil {
+			return nil, err
+		}
+		quote = q
 	}
 	taxRate := product.TaxRateBP
-	priceIncludesTax := true
-	if product.PriceIncludesTax != nil {
-		priceIncludesTax = *product.PriceIncludesTax
-	}
-	totals := domain.ComputeTotals(subtotal, 0, taxRate, priceIncludesTax)
-	metadata := make(map[string]any, len(in.Metadata))
-	for k, v := range in.Metadata {
-		metadata[k] = v
-	}
+	metadata := couponMetadata(in.Metadata, quote, in.ExternalCustomerID)
 	metaJSON, err := json.Marshal(metadata)
 	if err != nil {
 		return nil, fmt.Errorf("%w: metadata is not encodable: %w", ErrPlanNotSellable, err)
@@ -242,13 +296,23 @@ func (s *Service) createOrder(
 	if err != nil {
 		return nil, fmt.Errorf("%w: buyer is not encodable: %w", ErrPlanNotSellable, err)
 	}
+	// A trial coupon reserves the period the licence will be granted for:
+	// the quote carries max(coupon.trial_days, plan.trial_days) (spec
+	// §3.9), and settlement reads the reservation rather than recomputing
+	// it from a plan that may have changed in between.
+	var periodEnd *time.Time
+	if quote.TrialDays > 0 {
+		end := time.Now().Add(time.Duration(quote.TrialDays) * 24 * time.Hour)
+		periodEnd = &end
+	}
 	return s.Store.CreatePaymentOrder(ctx, store.CreateOrderInput{
 		ProductID: product.ID, PlanID: plan.ID, PriceID: price.ID, Email: email, Kind: "new",
-		Quantity: in.Quantity, SubtotalMinor: subtotal, DiscountMinor: totals.DiscountMinor,
-		TaxMinor: totals.TaxMinor, TotalMinor: totals.TotalMinor,
+		Quantity: in.Quantity, SubtotalMinor: quote.SubtotalMinor, DiscountMinor: quote.DiscountMinor,
+		TaxMinor: quote.TaxMinor, TotalMinor: quote.TotalMinor,
 		Currency: settlementCurrency, CurrencyExponent: domain.CurrencyExponent(settlementCurrency),
 		TaxRateBP: taxRate, Provider: providerName, ExpiresAt: time.Now().Add(s.orderTTL(ctx)),
 		Buyer: buyerJSON, Metadata: metaJSON, CreatedByKeyID: in.CreatedByKeyID,
+		Discounts: orderDiscounts(quote), PeriodEnd: periodEnd,
 	})
 }
 

@@ -49,6 +49,26 @@ type Quote struct {
 	Discounts     []Discount `json:"discounts"`
 }
 
+// Codes returns the applied codes in the order the discounts were
+// applied. It is what the order's signature is built from, so it must
+// list only codes that were actually applied — with ignore_invalid_coupons
+// a rejected code is not part of the purchase.
+func (q *Quote) Codes() []string {
+	if q == nil || len(q.Discounts) == 0 {
+		return nil
+	}
+	codes := make([]string, 0, len(q.Discounts))
+	for _, d := range q.Discounts {
+		codes = append(codes, d.Code)
+	}
+	return codes
+}
+
+// FullPrice is the quote for a purchase with no coupon applied. Checkout
+// uses it when coupon support is not wired into a service, so every order
+// is priced through the same arithmetic.
+func FullPrice(in QuoteInput) *Quote { return price(in, nil, 0) }
+
 // QuoteInput is one pricing request. The caller supplies the money it has
 // already resolved (plan, product, quantity, subtotal) because only
 // checkout knows how to resolve a provider price; coupons decides what
