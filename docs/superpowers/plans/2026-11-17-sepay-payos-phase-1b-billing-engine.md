@@ -82,7 +82,7 @@ If the implementer's in-flight `service.go` is further along than Task 4, keep i
 - No hidden clock. `billing.Service` uses `time.Now().UTC()`; every store function and pure policy function takes `now` as a parameter so tests can pin an exact instant. This matches the repo (grep: there is no fake-clock helper anywhere) and keeps `payment_orders.expires_at > now` honest.
 - Per-row failures are logged and the run continues (the expiry loop's behaviour); `RunOnce` returns an error only when the scan itself fails or `ctx` is cancelled. A plan with no price is a configuration problem, not a crash.
 - `go test -p 1 ./...` stays green. Integration tests need `TEST_DATABASE_URL` and skip without it (`internal/testsupport/testdb`).
-- AGPLv3 §7(b): the "Powered by Keygate" footer stays on every renewal email (it is added by `withAttribution` at send time — do not bypass it).
+- AGPLv3 §7(b): the "Powered by DSoft" footer stays on every renewal email (it is added by `withAttribution` at send time — do not bypass it).
 
 ### Shared files this plan edits (declared, additive)
 
@@ -5966,4 +5966,4 @@ The block in Task 11, Step 3.
 - The rest of the suite green: `./internal/store/... ./internal/payment/... ./internal/service/...`.
 - `go test ./internal/billing -run TestSettlementAppliesUpgradeOrder -v` does **not** print `SKIP` (P1 applied).
 - No file outside `internal/billing/`, `internal/store/billing.go`, `internal/payment/checkout/` and `internal/service/email*.go` is modified by this module.
-- The "Powered by Keygate" footer is intact in every rendered mail: `service.withAttribution` is what appends it, and none of this plan's mail path bypasses the relay.
+- The "Powered by DSoft" footer is intact in every rendered mail: `service.withAttribution` is what appends it, and none of this plan's mail path bypasses the relay.

@@ -24,7 +24,7 @@
 - Migrations are additive only (`db/migrations/YYYYMMDD_name.up.sql` + `.down.sql`); never edit an applied migration.
 - Phase 1a must not call the Stripe API, read Stripe prices or touch `internal/payment/stripe.go`.
 - Every new API error code is used with exactly one HTTP status (`go test ./pkg/response -run TestErrorCodeMapsToExactlyOneStatus`).
-- AGPLv3 §7(b): "Powered by Keygate" / `attribution_text` / `attribution_url` / `X-Powered-By` stay visible on every new page.
+- AGPLv3 §7(b): "Powered by DSoft" / `attribution_text` / `attribution_url` / `X-Powered-By` stay visible on every new page.
 - `go test -p 1 ./...` must stay green; integration tests need `TEST_DATABASE_URL` and are skipped without it (existing `testsupport/testdb` behaviour).
 
 ## Review Focus
@@ -6363,7 +6363,7 @@ export default function CheckoutPayPage() {
       )}
 
       <footer className="pt-4 text-center text-xs text-muted-foreground">
-        Powered by Keygate
+        Powered by DSoft
       </footer>
     </main>
   );
@@ -6431,7 +6431,7 @@ Keep `/checkout/success` and the Stripe pay page untouched. Add the nav group wi
 Run: `cd web && npm run typecheck && npm run lint && npm run build`
 Expected: all three exit 0.
 
-Manual check with the existing Playwright MCP against the running dev app (`pnpm run dev:web` in the repo root, or the built app served by the Go server): open `/checkout/pay/KG7F3K2Q` with a seeded pending order, confirm the QR image, bank fields, copy buttons, countdown, the "Powered by Keygate" footer; then mark the order paid from admin and confirm the page flips to "Đã thanh toán" within one poll (≤3 s). Screenshot the paid state for the review notes.
+Manual check with the existing Playwright MCP against the running dev app (`pnpm run dev:web` in the repo root, or the built app served by the Go server): open `/checkout/pay/KG7F3K2Q` with a seeded pending order, confirm the QR image, bank fields, copy buttons, countdown, the "Powered by DSoft" footer; then mark the order paid from admin and confirm the page flips to "Đã thanh toán" within one poll (≤3 s). Screenshot the paid state for the review notes.
 
 - [ ] **Step 9: Commit**
 
