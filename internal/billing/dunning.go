@@ -26,6 +26,12 @@ func (s *Service) dun(ctx context.Context, sub *model.Subscription, lic *model.L
 		return nil
 	}
 	end := sub.CurrentPeriodEnd.UTC()
+	if sub.Status == model.StatusCanceled || sub.CancelAtPeriodEnd {
+		// The scan filters cancelled rows, but a subscription can be
+		// cancelled between the scan and here; the ladder must not walk a
+		// customer who has already turned renewal off.
+		return nil
+	}
 	graceEnd := end.AddDate(0, 0, graceDays(sub.Plan))
 	expiry := graceEnd.Add(holdDuration(sub.Plan))
 
@@ -64,6 +70,11 @@ func (s *Service) markPastDueAndMail(ctx context.Context, sub *model.Subscriptio
 	}
 	if fresh == nil || fresh.License == nil || fresh.CurrentPeriodEnd == nil ||
 		!fresh.CurrentPeriodEnd.Equal(end) || fresh.License.Status != model.StatusPastDue {
+		return nil
+	}
+	if fresh.Status == model.StatusCanceled || fresh.CancelAtPeriodEnd {
+		// A cancellation and a dunning notice cannot both be true: the
+		// customer turned renewal off before the period ended.
 		return nil
 	}
 	if s.deps.Email == nil {
@@ -126,6 +137,11 @@ func (s *Service) suspendIfDue(ctx context.Context, sub *model.Subscription, lic
 		return nil
 	}
 	if fresh.License.Status != model.StatusSuspended || fresh.License.SuspendedBy != store.BillingSuspendedBy {
+		return nil
+	}
+	if fresh.Status == model.StatusCanceled || fresh.CancelAtPeriodEnd {
+		// Suspended and cancelled at once is not a customer state: the
+		// ladder ends where the cancellation starts.
 		return nil
 	}
 	if s.deps.Email == nil {
