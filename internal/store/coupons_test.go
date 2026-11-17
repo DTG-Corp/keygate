@@ -172,7 +172,7 @@ func TestCouponCodeIsUniqueAndTaken(t *testing.T) {
 	}
 }
 
-func TestUpdateCouponReplacesScopesAtomically(t *testing.T) {
+func TestUpdateCouponReplacesScopes(t *testing.T) {
 	s := couponTestStore(t)
 	ctx := context.Background()
 	suffix := couponSuffix()
@@ -222,7 +222,7 @@ func TestUpdateCouponReplacesScopesAtomically(t *testing.T) {
 	}
 }
 
-func TestDeleteCouponRemovesOrArchives(t *testing.T) {
+func TestDeleteArchivesWhenRedeemed(t *testing.T) {
 	s := couponTestStore(t)
 	ctx := context.Background()
 	suffix := couponSuffix()

@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/tabloy/keygate/internal/model"
+	"github.com/tabloy/keygate/internal/payment/coupons"
 	"github.com/tabloy/keygate/internal/store"
 )
 
@@ -429,10 +430,100 @@ func (f *paymentsFixture) portalCall(h *CouponsPortalHandler, body string) (int,
 	return c.Writer.Status(), out
 }
 
-func TestRegisterCouponsRoutes(t *testing.T) {
+// TestCouponCodesMatchConstants checks the step between the coupons
+// package and the literal strings the handlers write: every rejection the
+// package can return is pinned in the vocabulary with the status its
+// comment documents, and the admin-only duplicate-code answer is pinned
+// too.
+func TestCouponCodesMatchConstants(t *testing.T) {
+	for _, code := range []string{
+		coupons.CodeInvalid, coupons.CodeStackLimit, coupons.CodeGroupConflict,
+		coupons.CodeNotStackable, coupons.CodeTrialMixed, coupons.CodeAssigned,
+	} {
+		spec, ok := paymentVocabulary[code]
+		if !ok {
+			t.Errorf("%q is not pinned in paymentVocabulary", code)
+			continue
+		}
+		if spec.status != http.StatusUnprocessableEntity {
+			t.Errorf("%q is pinned with %d, want 422", code, spec.status)
+		}
+		if !spec.emitted {
+			t.Errorf("%q is pinned as not emitted, but the handlers write it", code)
+		}
+	}
+	// The two refusals a client retries differently are 409, not 422: the
+	// coupon exists and is valid, there is just none of it left (or the
+	// code is already someone else's).
+	for code, want := range map[string]string{
+		coupons.CodeExhausted: "PAYMENT_COUPON_EXHAUSTED",
+		coupons.CodeCodeTaken: "PAYMENT_COUPON_CODE_TAKEN",
+	} {
+		spec, ok := paymentVocabulary[code]
+		if !ok || spec.status != http.StatusConflict || !spec.emitted {
+			t.Errorf("%s = %+v, want 409 emitted", want, spec)
+		}
+		if code != want {
+			t.Errorf("constant value %q != %q", code, want)
+		}
+	}
+}
+
+// TestCouponWritesAreAudited: the admin log is where "who made it free" is
+// answered, so create, update and delete each leave a line. Audit writes
+// are asynchronous, hence the wait.
+func TestCouponWritesAreAudited(t *testing.T) {
+	f := newCouponHandlerFixture(t)
+	h := f.couponAdmin()
+	code := "AUD" + strings.ToUpper(f.suffix)
+
+	status, out := f.call(h.Create, http.MethodPost, "/api/v1/admin/coupons",
+		`{"code":"`+code+`","type":"percent","value":1000}`, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("create status %d: %v", status, out)
+	}
+	data, _ := out["data"].(map[string]any)
+	id, _ := data["id"].(string)
+
+	status, out = f.call(h.Update, http.MethodPut, "/api/v1/admin/coupons/"+id,
+		`{"type":"percent","value":2000}`, nil, gin.Param{Key: "id", Value: id})
+	if status != http.StatusOK {
+		t.Fatalf("update status %d: %v", status, out)
+	}
+	status, out = f.call(h.Delete, http.MethodDelete, "/api/v1/admin/coupons/"+id, "", nil,
+		gin.Param{Key: "id", Value: id})
+	if status != http.StatusOK {
+		t.Fatalf("delete status %d: %v", status, out)
+	}
+
+	// The audit rows are written by goroutines: poll briefly rather than
+	// sleeping a fixed time.
+	deadline := time.Now().Add(3 * time.Second)
+	var actions map[string]int
+	for time.Now().Before(deadline) {
+		var rows []struct {
+			Action string `bun:"action"`
+		}
+		if err := f.s.DB.NewRaw("SELECT action FROM audit_logs WHERE entity = 'coupon' AND entity_id = ?", id).
+			Scan(f.ctx, &rows); err != nil {
+			t.Fatalf("read audit rows: %v", err)
+		}
+		actions = map[string]int{}
+		for _, row := range rows {
+			actions[row.Action]++
+		}
+		if actions["create"] > 0 && actions["update"] > 0 && actions["delete"] > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("audit actions = %v, want create, update and delete", actions)
+}
+
+func TestRegisterCouponsAdminRoutes(t *testing.T) {
 	r := gin.New()
 	RegisterCouponsAdminRoutes(r.Group("/api/v1/admin"), &CouponsAdminHandler{Store: nil})
-	RegisterCouponsPortalRoutes(r.Group("/api/v1/portal"), &CouponsPortalHandler{})
+
 	want := map[string]bool{
 		"GET /api/v1/admin/coupons":                 false,
 		"POST /api/v1/admin/coupons":                false,
@@ -442,7 +533,6 @@ func TestRegisterCouponsRoutes(t *testing.T) {
 		"DELETE /api/v1/admin/coupons/:id":          false,
 		"GET /api/v1/admin/coupons/:id/redemptions": false,
 		"GET /api/v1/admin/payments/redemptions":    false,
-		"POST /api/v1/portal/coupons/validate":      false,
 	}
 	for _, route := range r.Routes() {
 		key := route.Method + " " + route.Path
@@ -454,5 +544,22 @@ func TestRegisterCouponsRoutes(t *testing.T) {
 		if !found {
 			t.Errorf("route %q is not mounted", key)
 		}
+	}
+}
+
+// TestRegisterCouponsPortalRoutes proves the portal route mounts under the
+// session group the Lead supplies, and that the admin registration does not
+// sneak it in.
+func TestRegisterCouponsPortalRoutes(t *testing.T) {
+	r := gin.New()
+	RegisterCouponsPortalRoutes(r.Group("/api/v1/portal"), &CouponsPortalHandler{})
+	found := false
+	for _, route := range r.Routes() {
+		if route.Method+" "+route.Path == "POST /api/v1/portal/coupons/validate" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("portal validate route is not mounted")
 	}
 }

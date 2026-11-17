@@ -91,7 +91,77 @@ func TestRedeemForOrderWritesRowsAndBumpsCounters(t *testing.T) {
 	}
 }
 
-func TestRedeemForOrderIsIdempotentUnderConcurrency(t *testing.T) {
+// TestRedeemIsIdempotent pins the plain case: the paid hook can run twice
+// for the same order (a redelivered webhook, an operator retry) and the
+// ledger must hold one row per coupon either way.
+func TestRedeemIsIdempotent(t *testing.T) {
+	f := newQuoteFixture(t)
+	c := f.create(nil)
+	order := f.couponOrder([]store.OrderDiscount{{
+		CouponID: c.ID, CouponCode: c.Code, Type: "percent", Value: 1000,
+		AmountMinor: 100_000, Priority: 100,
+	}}, map[string]any{"codes": []string{c.Code}}, 1_000_000, 100_000, 900_000, false)
+
+	cs := f.service()
+	for i := 0; i < 3; i++ {
+		if err := cs.RedeemForOrder(f.ctx, order); err != nil {
+			t.Fatalf("redeem %d: %v", i, err)
+		}
+	}
+	rows, _, err := f.s.ListRedemptions(f.ctx, store.RedemptionFilter{CouponID: c.ID, Page: store.Page{Limit: 10}})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows = %+v err = %v, want one", rows, err)
+	}
+	if got, err := f.s.GetCoupon(f.ctx, c.ID); err != nil || got.RedeemedCount != 1 {
+		t.Fatalf("redeemed_count = %+v err = %v", got, err)
+	}
+}
+
+// TestRedeemConcurrentDifferentOrders takes the other lock order: many
+// settlements of one coupon at once, each for its own order. The counter
+// is the number of orders, never fewer.
+func TestRedeemConcurrentDifferentOrders(t *testing.T) {
+	f := newQuoteFixture(t)
+	c := f.create(nil)
+	const orders = 8
+	paid := make([]*model.PaymentOrder, 0, orders)
+	for i := 0; i < orders; i++ {
+		paid = append(paid, f.couponOrder([]store.OrderDiscount{{
+			CouponID: c.ID, CouponCode: c.Code, Type: "percent", Value: 1000,
+			AmountMinor: 100_000, Priority: 100,
+		}}, map[string]any{"codes": []string{c.Code}}, 1_000_000, 100_000, 900_000, false))
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, orders)
+	for _, order := range paid {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := f.service().RedeemForOrder(f.ctx, order); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent redeem: %v", err)
+	}
+
+	stats, err := f.s.CouponRedemptionStats(f.ctx, c.ID)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Count != orders || stats.AmountMinor != int64(orders)*100_000 {
+		t.Fatalf("stats = %+v, want %d redemptions", stats, orders)
+	}
+	if got, err := f.s.GetCoupon(f.ctx, c.ID); err != nil || got.RedeemedCount != orders {
+		t.Fatalf("redeemed_count = %+v err = %v", got, err)
+	}
+}
+
+func TestRedeemConcurrentSameOrder(t *testing.T) {
 	f := newQuoteFixture(t)
 	coupons := []*model.Coupon{
 		f.create(nil),

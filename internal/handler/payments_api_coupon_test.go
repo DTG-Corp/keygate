@@ -84,7 +84,7 @@ func TestCreateOrderReturnsCouponBreakdown(t *testing.T) {
 	}
 }
 
-func TestCreateOrderRequiresTaxCodeForInvoice(t *testing.T) {
+func TestCreateOrderRequiresTaxCode(t *testing.T) {
 	f := newPaymentsFixture(t)
 	f.price(t, f.planA, "sepay", 1_000_000)
 	key := f.key(t, model.ScopePaymentsWrite)

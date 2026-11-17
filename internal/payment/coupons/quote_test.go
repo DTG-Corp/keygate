@@ -34,7 +34,7 @@ func inclusiveInput(subtotal int64) QuoteInput {
 	}
 }
 
-func TestAdmitOrderAndStacking(t *testing.T) {
+func TestAdmitStackingRules(t *testing.T) {
 	general := coupon("GEN10", "percent", 1000, "general", 100)
 	campaign := coupon("CAMP50", "fixed", 50_000, "campaign", 200)
 	private := coupon("VIP", "fixed", 20_000, "private", 50)
@@ -100,26 +100,53 @@ func TestAdmitOrderAndStacking(t *testing.T) {
 		}
 	})
 
-	t.Run("trial and amount cannot mix; ignore keeps the earlier one", func(t *testing.T) {
-		tr := trialCoupon("TRIAL30", 30)
-		_, _, err := admit([]*model.Coupon{general, tr}, in, 2)
-		if got := ErrorCode(err); got != CodeTrialMixed {
-			t.Fatalf("code = %q, err = %v", got, err)
-		}
-		withIgnore := in
-		withIgnore.IgnoreInvalid = true
-		applied, days, err := admit([]*model.Coupon{general, tr}, withIgnore, 2)
-		if err != nil || len(applied) != 1 || days != 0 {
-			t.Fatalf("applied = %+v days = %d err = %v", applied, days, err)
-		}
-	})
-
 	t.Run("two trial coupons are rejected", func(t *testing.T) {
 		_, _, err := admit([]*model.Coupon{trialCoupon("T1", 7), trialCoupon("T2", 30)}, in, 2)
 		if got := ErrorCode(err); got != CodeInvalid {
 			t.Fatalf("code = %q, err = %v", got, err)
 		}
 	})
+}
+
+// TestTrialCannotMix pins review focus 2: a trial coupon is granted on its
+// own or not at all, and `ignore_invalid` keeps the coupon that came first
+// rather than letting a trial and a discount combine.
+func TestTrialCannotMix(t *testing.T) {
+	general := coupon("GEN10", "percent", 1000, "general", 100)
+	fixed := coupon("FIX20", "fixed", 20_000, "campaign", 200)
+	trial := trialCoupon("TRIAL30", 30)
+	in := inclusiveInput(1_000_000)
+
+	for name, codes := range map[string][]*model.Coupon{
+		"amount then trial":       {general, trial},
+		"trial then amount":       {trial, general},
+		"two amounts and a trial": {general, fixed, trial},
+	} {
+		if _, _, err := admit(codes, in, 3); ErrorCode(err) != CodeTrialMixed {
+			t.Errorf("%s: code = %q, err = %v", name, ErrorCode(err), err)
+		}
+	}
+
+	// Alone it applies and carries its days.
+	applied, days, err := admit([]*model.Coupon{trial}, in, 2)
+	if err != nil || len(applied) != 1 || days != 30 {
+		t.Fatalf("trial alone: applied = %+v days = %d err = %v", applied, days, err)
+	}
+
+	// Best effort keeps the first coupon and drops the rest.
+	withIgnore := in
+	withIgnore.IgnoreInvalid = true
+	applied, days, err = admit([]*model.Coupon{general, trial}, withIgnore, 2)
+	if err != nil || len(applied) != 1 || applied[0].Code != "GEN10" || days != 0 {
+		t.Fatalf("ignore: applied = %+v days = %d err = %v", applied, days, err)
+	}
+	// Order comes from priority then code, not from the request: the same
+	// pair in either order keeps GEN10, so the answer cannot depend on
+	// which code the buyer typed first.
+	applied, days, err = admit([]*model.Coupon{trial, general}, withIgnore, 2)
+	if err != nil || len(applied) != 1 || applied[0].Code != "GEN10" || days != 0 {
+		t.Fatalf("reversed input: applied = %+v days = %d err = %v", applied, days, err)
+	}
 }
 
 func TestPriceStacksPercentThenFixed(t *testing.T) {

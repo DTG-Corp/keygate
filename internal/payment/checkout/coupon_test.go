@@ -379,7 +379,7 @@ func TestPreviewQuotePricesCodes(t *testing.T) {
 	}
 }
 
-func TestCheckoutQuoteMatchesOrderTotals(t *testing.T) {
+func TestQuoteMatchesCheckoutTotals(t *testing.T) {
 	// Inclusive VAT: the discount comes off the gross price and the tax is
 	// recomputed once on the discounted amount, so the order row and the
 	// quote cannot disagree.
