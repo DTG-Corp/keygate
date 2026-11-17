@@ -345,3 +345,46 @@ func TestNewWithoutStorageUsesDisabled(t *testing.T) {
 // invoiceNumberPattern is the number format the spec fixes:
 // KG-<YYYY>-<000001>.
 var invoiceNumberPattern = regexp.MustCompile(`^KG-\d{4}-\d{6}$`)
+
+// AfterPaid is what settlement calls through its PaidHook: it must
+// create the invoice, and a redelivered webhook (the hook runs again on
+// retry) must not create a second one or a second event.
+func TestAfterPaidCreatesInvoiceOnce(t *testing.T) {
+	f := newInvoiceFixture(t)
+	order := f.order(orderOptions{})
+
+	f.svc.AfterPaid(f.ctx, order, nil, "sepay")
+	inv, err := f.s.GetInvoiceByOrderID(f.ctx, order.ID)
+	if err != nil {
+		t.Fatalf("invoice after paid hook: %v", err)
+	}
+	if inv.Status != model.InvoiceStatusIssued {
+		t.Fatalf("status = %q, want issued", inv.Status)
+	}
+
+	f.svc.AfterPaid(f.ctx, order, nil, "sepay") // redelivery
+	again, err := f.s.GetInvoiceByOrderID(f.ctx, order.ID)
+	if err != nil || again.ID != inv.ID || again.Number != inv.Number {
+		t.Fatalf("redelivery changed the invoice: %+v (%v)", again, err)
+	}
+	var count int
+	if err := f.s.DB.NewRaw("SELECT count(*) FROM invoices WHERE order_id = ?", order.ID).Scan(f.ctx, &count); err != nil {
+		t.Fatalf("count invoices: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("invoices for the order = %d, want 1", count)
+	}
+	issuedEvents := 0
+	for _, call := range f.emitter.calls {
+		if call.event == "invoice.issued" {
+			issuedEvents++
+		}
+	}
+	if issuedEvents != 1 {
+		t.Fatalf("invoice.issued events = %d, want 1", issuedEvents)
+	}
+
+	// The hook has no error return and runs inside the settlement's panic
+	// recovery; a nil order must be a no-op, not a crash.
+	f.svc.AfterPaid(f.ctx, nil, nil, "")
+}

@@ -209,6 +209,28 @@ func (s *Service) CreateForOrder(ctx context.Context, order *model.PaymentOrder)
 	return inv, nil
 }
 
+// AfterPaid creates the invoice for a settled order. It is the seam the
+// settlement service calls through settlement.PaidHook, so main wires
+// one line — settleSvc.PaidHook = invoiceSvc — and every paid order gets
+// its document without the settlement package knowing invoices exist.
+//
+// PaidHook has no error return: a failure here must not undo a payment.
+// The error is logged and the order stays invoiceable — CreateForOrder
+// is idempotent, so a retry (or the admin's manual create, once the
+// module that offers one lands) closes the gap.
+func (s *Service) AfterPaid(ctx context.Context, order *model.PaymentOrder, _ *model.License, _ string) {
+	if s == nil || order == nil {
+		return
+	}
+	if _, err := s.CreateForOrder(ctx, order); err != nil {
+		logger := s.Logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.Error("invoice: create for paid order", "order_id", order.ID, "error", err)
+	}
+}
+
 // buyerSnapshot freezes the order's buyer block, filling the email from
 // the order when the buyer object omitted it.
 func (s *Service) buyerSnapshot(order *model.PaymentOrder) []byte {
