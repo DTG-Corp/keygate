@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { useAuth } from "@/hooks/use-auth"
 import { useI18n } from "@/i18n"
 import { type BillingProfileInput, errorCode, portalBilling } from "@/lib/api"
 
@@ -21,6 +22,7 @@ const EMPTY: BillingProfileInput = {
 
 export default function PortalBillingProfilePage() {
   const { t } = useI18n()
+  const { user } = useAuth()
   const qc = useQueryClient()
   const [form, setForm] = useState<BillingProfileInput>(EMPTY)
   const [error, setError] = useState("")
@@ -32,16 +34,18 @@ export default function PortalBillingProfilePage() {
 
   useEffect(() => {
     if (!profile.data) return
+    // A saved profile wins; a first-time buyer starts from the signed-in
+    // account so the invoice block is not blank by default.
     setForm({
-      name: profile.data.name,
+      name: profile.data.name || user?.name || "",
       company_name: profile.data.company_name,
       tax_code: profile.data.tax_code,
       address: profile.data.address,
-      email: profile.data.email,
+      email: profile.data.email || user?.email || "",
       phone: profile.data.phone,
       request_invoice: profile.data.request_invoice ?? false,
     })
-  }, [profile.data])
+  }, [profile.data, user])
 
   const save = useMutation({
     meta: { ownErrors: true },

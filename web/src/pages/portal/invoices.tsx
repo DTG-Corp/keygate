@@ -11,7 +11,7 @@ import { portalInvoices } from "@/lib/api"
 import { saveBlob } from "@/lib/download"
 import { invoiceStatusClass, invoiceStatusLabel } from "@/lib/invoice-status"
 import { formatMoney } from "@/lib/money"
-import { formatDate } from "@/lib/utils"
+import { formatDateVN } from "@/lib/utils"
 
 export default function PortalInvoicesPage() {
   const { t } = useI18n()
@@ -68,7 +68,7 @@ export default function PortalInvoicesPage() {
                   <td className="p-3 font-mono">{invoice.number || invoice.id}</td>
                   <td className="p-3 font-mono text-xs">{invoice.order_id || "—"}</td>
                   <td className="p-3 text-muted-foreground">
-                    {invoice.issued_at ? formatDate(invoice.issued_at) : "—"}
+                    {invoice.issued_at ? formatDateVN(invoice.issued_at) : "—"}
                   </td>
                   <td className="p-3">
                     <Badge className={invoiceStatusClass(invoice.status)}>

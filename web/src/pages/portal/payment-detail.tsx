@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowLeft, Ban, ExternalLink, Loader2, RefreshCw } from "lucide-react"
 import { useState } from "react"
 import { Link, useParams } from "react-router-dom"
+import { CouponChips } from "@/components/coupon-codes"
 import { PaymentInstructionsBlock } from "@/components/payment-instructions"
 import { showToast } from "@/components/toast"
 import {
@@ -20,7 +21,7 @@ import { useI18n } from "@/i18n"
 import { portalPayments } from "@/lib/api"
 import { formatMoney } from "@/lib/money"
 import { paymentStatusClass, paymentStatusLabel } from "@/lib/payment-status"
-import { formatDate } from "@/lib/utils"
+import { formatDateVN } from "@/lib/utils"
 
 export default function PortalPaymentDetailPage() {
   const { t } = useI18n()
@@ -98,7 +99,11 @@ export default function PortalPaymentDetailPage() {
   if (!order) return <p className="text-sm text-muted-foreground">{t("portal.not_found")}</p>
 
   const isPending = order.status === "pending"
-  const canPay = isPending
+  // A pending order whose expiry has passed is not payable even before a
+  // webhook flips its status; the server refuses it with
+  // PAYMENT_ORDER_NOT_PAYABLE. Do not offer a button that can only fail.
+  const expiredByClock = !!order.expires_at && new Date(order.expires_at).getTime() <= Date.now()
+  const canPay = isPending && !expiredByClock
   return (
     <div className="space-y-4">
       <Button variant="ghost" size="sm" className="-ml-2" asChild>
@@ -130,10 +135,16 @@ export default function PortalPaymentDetailPage() {
               <Ban className="h-4 w-4" /> {t("portal.cancel_order")}
             </Button>
           )}
-          {order.invoice_id && (
+          {order.invoice_id ? (
             <Button variant="outline" asChild>
               <Link to={`/portal/invoices/${order.invoice_id}`}>{t("portal.invoice_link")}</Link>
             </Button>
+          ) : (
+            order.status === "paid" && (
+              <Button variant="outline" asChild>
+                <Link to="/portal/invoices">{t("portal.invoice_link")}</Link>
+              </Button>
+            )
           )}
         </div>
       </div>
@@ -165,7 +176,12 @@ export default function PortalPaymentDetailPage() {
             />
             {order.expires_at && isPending && (
               <p className="mt-4 text-xs text-muted-foreground">
-                {t("portal.orderExpires")}: {formatDate(order.expires_at)}
+                {t("portal.orderExpires")}: {formatDateVN(order.expires_at)}
+              </p>
+            )}
+            {isPending && expiredByClock && (
+              <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                {t("portal.order_not_payable")}
               </p>
             )}
             {(order.status === "expired" || order.status === "canceled") && (
@@ -183,8 +199,8 @@ export default function PortalPaymentDetailPage() {
           <CardContent>
             <dl className="space-y-2 text-sm">
               <Row label={t("portal.kind")} value={kindLabel(order.kind, t)} />
-              <Row label={t("portal.orderCreated")} value={formatDate(order.created_at)} />
-              {order.expires_at && <Row label={t("portal.orderExpires")} value={formatDate(order.expires_at)} />}
+              {order.created_at && <Row label={t("portal.orderCreated")} value={formatDateVN(order.created_at)} />}
+              {order.expires_at && <Row label={t("portal.orderExpires")} value={formatDateVN(order.expires_at)} />}
               {order.email && <Row label={t("portal.billingEmail")} value={order.email} />}
               <div className="flex items-baseline justify-between gap-3 border-t pt-2">
                 <dt className="text-muted-foreground">{t("portal.orderAmount")}</dt>
@@ -197,6 +213,7 @@ export default function PortalPaymentDetailPage() {
                   {t("pay.discount")}: −{formatMoney(order.discount_minor, order.currency, order.currency_exponent)}
                 </p>
               )}
+              <CouponChips discounts={order.discounts} currency={order.currency} exponent={order.currency_exponent} />
             </dl>
           </CardContent>
         </Card>

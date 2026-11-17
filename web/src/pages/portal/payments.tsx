@@ -1,22 +1,31 @@
 import { useQuery } from "@tanstack/react-query"
 import { ArrowRight } from "lucide-react"
+import { useState } from "react"
 import { Link } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useI18n } from "@/i18n"
 import { portalPayments } from "@/lib/api"
 import { formatMoney } from "@/lib/money"
 import { paymentStatusClass, paymentStatusLabel } from "@/lib/payment-status"
-import { formatDate } from "@/lib/utils"
+import { formatDateVN } from "@/lib/utils"
+
+// The shipped portal list has no status query parameter, so the filter
+// is applied to the orders this page has loaded. The hint under the
+// select says so instead of implying a server-side filter.
+const STATUSES = ["pending", "paid", "expired", "canceled", "refunded"] as const
 
 export default function PortalPaymentsPage() {
   const { t } = useI18n()
+  const [status, setStatus] = useState("all")
   const { data, isLoading, error } = useQuery({
     queryKey: ["portal", "payments", "orders"],
     queryFn: () => portalPayments.orders({ limit: 100 }),
   })
-  const orders = data?.orders ?? []
+  const loaded = data?.orders ?? []
+  const orders = status === "all" ? loaded : loaded.filter((order) => order.status === status)
 
   return (
     <div className="space-y-6">
@@ -25,12 +34,36 @@ export default function PortalPaymentsPage() {
         <p className="text-muted-foreground">{t("portal.myPaymentsDesc")}</p>
       </div>
 
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="space-y-1.5">
+          <label htmlFor="portal-order-status" className="text-sm font-medium">
+            {t("common.status")}
+          </label>
+          <Select value={status} onValueChange={setStatus}>
+            <SelectTrigger id="portal-order-status" className="w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t("common.all")}</SelectItem>
+              {STATUSES.map((value) => (
+                <SelectItem key={value} value={value}>
+                  {paymentStatusLabel(value, t)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {status !== "all" && <p className="pb-2 text-xs text-muted-foreground">{t("portal.filter_loaded_only")}</p>}
+      </div>
+
       {isLoading && <div className="h-40 animate-pulse rounded-lg bg-muted" />}
       {error && <p className="text-sm text-destructive">{(error as Error).message}</p>}
 
       {!isLoading && !error && orders.length === 0 && (
         <Card>
-          <CardContent className="py-12 text-center text-muted-foreground">{t("portal.no_orders")}</CardContent>
+          <CardContent className="py-12 text-center text-muted-foreground">
+            {loaded.length === 0 ? t("portal.no_orders") : t("portal.no_orders_match")}
+          </CardContent>
         </Card>
       )}
 
@@ -49,9 +82,9 @@ export default function PortalPaymentsPage() {
                     {order.plan_name && order.product_name ? ` · ${order.plan_name}` : ""}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {formatDate(order.created_at)}
+                    {formatDateVN(order.created_at)}
                     {order.expires_at && order.status === "pending"
-                      ? ` · ${t("portal.orderExpires")} ${formatDate(order.expires_at)}`
+                      ? ` · ${t("portal.orderExpires")} ${formatDateVN(order.expires_at)}`
                       : ""}
                   </p>
                 </div>
