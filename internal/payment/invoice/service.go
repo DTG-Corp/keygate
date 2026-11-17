@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -281,6 +282,14 @@ func itemsFor(order *model.PaymentOrder, description string) []model.InvoiceItem
 	quantity := order.Quantity
 	if quantity < 1 {
 		quantity = 1
+	}
+	if order.CreditMinor > 0 {
+		// The upgrade credit is part of the order's discount total; the
+		// line says so explicitly so the buyer can see why the plan price
+		// and the amount charged differ. The invoice's subtotal/discount/
+		// total are copied from the order and stay authoritative.
+		description += fmt.Sprintf(" (upgrade credit %s %s applied)",
+			formatMinor(order.CreditMinor, order.CurrencyExp, false), order.Currency)
 	}
 	unit := order.SubtotalMinor / int64(quantity)
 	if order.SubtotalMinor%int64(quantity) != 0 {

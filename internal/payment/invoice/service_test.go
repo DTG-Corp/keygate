@@ -312,6 +312,25 @@ func TestItemsForRoundingAndFallback(t *testing.T) {
 	}
 }
 
+// An upgrade order's invoice line names the credit it applied; the
+// invoice's money columns stay the order's snapshot.
+func TestItemsForUpgradeCredit(t *testing.T) {
+	order := &model.PaymentOrder{
+		PlanID: "plan-1", Quantity: 1, SubtotalMinor: 2_000_000, DiscountMinor: 800_000,
+		TotalMinor: 1_200_000, CreditMinor: 800_000, Currency: "VND", CurrencyExp: 0,
+	}
+	items := itemsFor(order, "Yearly")
+	if len(items) != 1 {
+		t.Fatalf("items = %+v", items)
+	}
+	if !strings.Contains(items[0].Description, "upgrade credit 800,000 VND applied") {
+		t.Errorf("description = %q, want the upgrade credit", items[0].Description)
+	}
+	if items[0].AmountMinor != 2_000_000 || items[0].UnitAmountMinor != 2_000_000 {
+		t.Errorf("line amounts = %+v, want the order subtotal", items[0])
+	}
+}
+
 func TestBuyerOfToleratesLegacyFields(t *testing.T) {
 	b := BuyerOf(json.RawMessage(`{"name":"A","company":"Legacy Ltd","tax_id":"123","email":"a@x.vn"}`))
 	if b.CompanyName != "Legacy Ltd" || b.TaxCode != "123" {
