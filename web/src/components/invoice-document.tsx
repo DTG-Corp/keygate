@@ -3,7 +3,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useI18n } from "@/i18n"
 import type { InvoiceBuyer, PaymentInvoice } from "@/lib/api"
 import { formatMoney } from "@/lib/money"
-import { formatDate } from "@/lib/utils"
+import { formatDateVN } from "@/lib/utils"
 
 // InvoiceDocument is the printable part of an invoice: seller and buyer
 // blocks, frozen line items and the money breakdown. Both the admin
@@ -115,7 +115,7 @@ export function InvoiceDocument({
         <Field label={t("invoices.number")} value={invoice.number || "—"} mono />
         <Field label={t("invoices.order")} value={invoice.order_id || "—"} mono />
         <Field label={t("common.status")} value={invoice.status} />
-        <Field label={t("invoices.issued_at")} value={invoice.issued_at ? formatDate(invoice.issued_at) : "—"} />
+        <Field label={t("invoices.issued_at")} value={invoice.issued_at ? formatDateVN(invoice.issued_at) : "—"} />
         {invoice.e_invoice_provider && (
           <Field
             label={t("invoices.einvoice")}

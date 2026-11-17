@@ -22,13 +22,16 @@ import {
 } from "@/lib/api"
 import { saveBlob } from "@/lib/download"
 import { currencyExponent, formatMoney } from "@/lib/money"
+import { formatDateVN } from "@/lib/utils"
 
 const TABS: ReportName[] = ["revenue", "reconciliation", "vat"]
 
+// The report window is a Vietnam calendar day. en-CA formats as
+// YYYY-MM-DD, the shape the handler reads as a VN day; using UTC here
+// would show the previous day before 07:00 in Vietnam.
 function isoDate(daysAgo: number): string {
-  const date = new Date()
-  date.setDate(date.getDate() - daysAgo)
-  return date.toISOString().slice(0, 10)
+  const date = new Date(Date.now() - daysAgo * 86_400_000)
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh" }).format(date)
 }
 
 export default function PaymentReportsPage() {
@@ -48,8 +51,10 @@ export default function PaymentReportsPage() {
   // Reconciliation refuses product and plan filters (the ledger has no
   // such columns), so they are not sent for that report.
   const filter: ReportFilter = {
-    from: from ? new Date(`${from}T00:00:00`).toISOString() : undefined,
-    to: to ? new Date(`${to}T23:59:59.999`).toISOString() : undefined,
+    // Bare dates keep the window in Vietnam days on both the JSON and
+    // CSV routes; the server expands `to` to the end of that day.
+    from: from || undefined,
+    to: to || undefined,
     provider: provider === "all" ? undefined : provider,
     product_id: tab === "reconciliation" ? undefined : product === "all" ? undefined : product,
     plan_id: tab === "reconciliation" ? undefined : plan === "all" ? undefined : plan,
@@ -236,8 +241,10 @@ export default function PaymentReportsPage() {
           {active.data && (
             <p className="text-xs text-muted-foreground">
               {t("reports.window", {
-                from: active.data.from.slice(0, 10),
-                to: active.data.to.slice(0, 10),
+                // The handler returns UTC instants; show them in the same
+                // Vietnam zone it reports in, not sliced as UTC dates.
+                from: formatDateVN(active.data.from),
+                to: formatDateVN(active.data.to),
                 timezone: active.data.timezone,
               })}
             </p>

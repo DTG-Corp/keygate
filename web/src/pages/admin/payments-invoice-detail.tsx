@@ -51,6 +51,7 @@ export default function PaymentInvoiceDetailPage() {
     onSuccess: () => {
       refresh()
       setIssueOpen(false)
+      setActionError("")
       showToast(t("invoices.issued"), "success")
     },
     onError: (err: Error) => setActionError(err.message),
@@ -63,6 +64,7 @@ export default function PaymentInvoiceDetailPage() {
       refresh()
       setVoidOpen(false)
       setReason("")
+      setActionError("")
       showToast(t("invoices.voided"), "success")
     },
     onError: (err: Error) => setActionError(err.message),
@@ -95,8 +97,11 @@ export default function PaymentInvoiceDetailPage() {
   }
   if (!invoice) return <p className="text-sm text-muted-foreground">{t("invoices.not_found")}</p>
 
-  const canIssue = invoice.status === "draft" || invoice.status === "pending_issue"
-  const canVoid = invoice.status !== "void"
+  // The service issues only a pending_issue invoice; a draft is not
+  // issuable yet (the API answers INVOICE_ALREADY_ISSUED). Voiding is
+  // allowed for issued and pending_issue, never for an already-void one.
+  const canIssue = invoice.status === "pending_issue"
+  const canVoid = invoice.status === "issued" || invoice.status === "pending_issue"
   const error = actionError || (issue.error as Error)?.message || (voidInvoice.error as Error)?.message
 
   return (
@@ -124,12 +129,24 @@ export default function PaymentInvoiceDetailPage() {
             {t("invoices.download_pdf")}
           </Button>
           {canIssue && (
-            <Button onClick={() => setIssueOpen(true)}>
+            <Button
+              onClick={() => {
+                setActionError("")
+                setIssueOpen(true)
+              }}
+            >
               <CheckCircle2 className="h-4 w-4" /> {t("invoices.issue")}
             </Button>
           )}
           {canVoid && (
-            <Button variant="outline" className="text-destructive" onClick={() => setVoidOpen(true)}>
+            <Button
+              variant="outline"
+              className="text-destructive"
+              onClick={() => {
+                setActionError("")
+                setVoidOpen(true)
+              }}
+            >
               <XCircle className="h-4 w-4" /> {t("invoices.void")}
             </Button>
           )}

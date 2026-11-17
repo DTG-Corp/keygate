@@ -24,7 +24,7 @@ import { adminRedemptions } from "@/lib/api"
 import { saveBlob } from "@/lib/download"
 import { formatMoney } from "@/lib/money"
 import { useDebounced } from "@/lib/use-debounced"
-import { formatDate } from "@/lib/utils"
+import { formatDateVN } from "@/lib/utils"
 
 export default function PaymentRedemptionsPage() {
   const { t } = useI18n()
@@ -40,8 +40,11 @@ export default function PaymentRedemptionsPage() {
   const filter = {
     coupon: couponQuery || undefined,
     email: emailQuery || undefined,
-    from: from ? new Date(`${from}T00:00:00`).toISOString() : undefined,
-    to: to ? new Date(`${to}T23:59:59.999`).toISOString() : undefined,
+    // Bare dates: the handler reads them as whole days in Vietnam time.
+    // Sending a browser-local ISO instant would shift the window for an
+    // operator outside Vietnam.
+    from: from || undefined,
+    to: to || undefined,
   }
 
   const { data, isLoading, error } = useQuery({
@@ -184,10 +187,10 @@ export default function PaymentRedemptionsPage() {
                       <DataTableCell className="whitespace-nowrap tabular-nums">
                         {row.type === "trial"
                           ? `${t("coupons.trial_days")}: ${row.trial_days}`
-                          : formatMoney(row.amount_minor, row.currency, row.currency_exponent)}
+                          : formatMoney(row.amount_minor, row.currency || "VND", row.currency_exponent)}
                       </DataTableCell>
                       <DataTableCell className="whitespace-nowrap text-sm text-muted-foreground">
-                        {formatDate(row.created_at)}
+                        {formatDateVN(row.created_at)}
                       </DataTableCell>
                     </DataTableRow>
                   ))}

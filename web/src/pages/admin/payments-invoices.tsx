@@ -26,7 +26,7 @@ import { saveBlob } from "@/lib/download"
 import { invoiceStatusClass, invoiceStatusLabel } from "@/lib/invoice-status"
 import { formatMoney } from "@/lib/money"
 import { useDebounced } from "@/lib/use-debounced"
-import { formatDate } from "@/lib/utils"
+import { formatDateVN } from "@/lib/utils"
 
 const STATUSES = ["draft", "pending_issue", "issued", "void"] as const
 
@@ -45,8 +45,10 @@ export default function PaymentInvoicesPage() {
     status: status === "all" ? undefined : status,
     number: numberQuery || undefined,
     order_id: orderQuery || undefined,
-    from: from ? new Date(`${from}T00:00:00`).toISOString() : undefined,
-    to: to ? new Date(`${to}T23:59:59.999`).toISOString() : undefined,
+    // Bare dates are whole Vietnam days on the server; a browser-local
+    // instant would move the window for operators in other zones.
+    from: from || undefined,
+    to: to || undefined,
   }
 
   const { data, isLoading, error } = useQuery({
@@ -169,7 +171,7 @@ export default function PaymentInvoicesPage() {
                         </Badge>
                       </DataTableCell>
                       <DataTableCell className="whitespace-nowrap text-sm text-muted-foreground">
-                        {invoice.issued_at ? formatDate(invoice.issued_at) : "—"}
+                        {invoice.issued_at ? formatDateVN(invoice.issued_at) : "—"}
                       </DataTableCell>
                       <DataTableCell>
                         <div className="flex justify-end gap-1">
