@@ -3,6 +3,7 @@ package settlement
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -119,6 +120,8 @@ func (s *Service) Settle(ctx context.Context, orderID, providerName string, ev p
 		return s.settleNew(ctx, order, providerName, ev)
 	case "renewal":
 		return s.settleRenewal(ctx, order, providerName, ev)
+	case "upgrade":
+		return s.settleUpgrade(ctx, order, providerName, ev)
 	default:
 		return fmt.Errorf("settlement: order %s has unsupported kind %q", order.Code, order.Kind)
 	}
@@ -153,6 +156,17 @@ func orderMismatch(order *model.PaymentOrder, providerName string, ev provider.W
 // of it, records why for an operator, and returns the error so the
 // provider retries — it is not a payment failure and emits no event.
 func (s *Service) settleNew(ctx context.Context, order *model.PaymentOrder, providerName string, ev provider.WebhookEvent) error {
+	// A paid trial-conversion order converts the trial licence it names
+	// instead of minting a second one. The order is a kind new order
+	// because checkout refuses a new order that names a licence; the
+	// trial licence id travels in metadata.billing.
+	if trialLicenseID, conversion := trialConversionLicenseID(order); conversion {
+		if trialLicenseID == "" {
+			return s.failGrant(ctx, order, providerName, ev,
+				fmt.Errorf("%w: order %s names no trial licence", store.ErrTrialConversionInvalid, order.Code))
+		}
+		return s.settleTrialConversion(ctx, order, trialLicenseID, providerName, ev)
+	}
 	lic, plan, err := buildNewLicense(ctx, s.Store, order)
 	if err != nil {
 		return s.failGrant(ctx, order, providerName, ev, err)
@@ -222,8 +236,11 @@ func (s *Service) settleNew(ctx context.Context, order *model.PaymentOrder, prov
 // settleRenewal extends the licence a paid renewal order bought, marks
 // the order paid and records the matched transfer in one transaction, so
 // the money and the extension either all land or none do. A licence that
-// is already active or past due is eligible; past due becomes active in
-// the same write.
+// is already active or past due is eligible, and one the billing engine
+// suspended is reinstated first: paying the renewal is exactly the act
+// that ends the suspension. A next_cycle plan change waiting on the
+// licence is applied to the same transaction, after the extension and
+// before anything is emitted.
 func (s *Service) settleRenewal(ctx context.Context, order *model.PaymentOrder, providerName string, ev provider.WebhookEvent) error {
 	plan, err := s.Store.FindPlanByID(ctx, order.PlanID)
 	if err != nil {
@@ -231,6 +248,7 @@ func (s *Service) settleRenewal(ctx context.Context, order *model.PaymentOrder, 
 	}
 	var paid, alreadySettled *model.PaymentOrder
 	var granted *model.License
+	var nextUpgrade *model.LicenseUpgrade
 	err = s.Store.RunInTx(ctx, func(ctx context.Context, tx bun.Tx) error {
 		locked, err := s.Store.GetPaymentOrderForUpdate(ctx, tx, order.ID)
 		if err != nil {
@@ -243,8 +261,25 @@ func (s *Service) settleRenewal(ctx context.Context, order *model.PaymentOrder, 
 		if domain.IsOrderTerminal(locked.Status) {
 			return store.ErrOrderNotPayable
 		}
+		// Money for a renewal lifts the billing engine's suspension before
+		// the extension: an operator's suspension is not the engine's to
+		// lift, and the helper leaves it alone.
+		if _, err := s.Store.ReinstateLicenseForRenewalIn(ctx, tx, locked.LicenseID); err != nil {
+			return err
+		}
 		if err := store.ExtendLicenseFromOrderIn(ctx, tx, locked, plan); err != nil {
 			return err
+		}
+		// A next_cycle plan change was scheduled for this renewal: apply it
+		// now, in the same transaction as the period it starts.
+		nextUpgrade, err = s.Store.FindPendingNextCycleUpgradeIn(ctx, tx, locked.LicenseID)
+		if err != nil {
+			return err
+		}
+		if nextUpgrade != nil {
+			if err := s.Store.ApplyNextCycleUpgradeIn(ctx, tx, nextUpgrade); err != nil {
+				return err
+			}
 		}
 		granted, err = s.Store.FindLicenseByIDIn(ctx, tx, locked.LicenseID)
 		if err != nil {
@@ -266,8 +301,184 @@ func (s *Service) settleRenewal(ctx context.Context, order *model.PaymentOrder, 
 		return nil
 	}
 	s.dispatchPaid(ctx, paid, granted, providerName, ev)
+	if s.Webhooks != nil && nextUpgrade != nil {
+		s.Webhooks.Dispatch(ctx, granted.ProductID, model.EventPlanChanged, map[string]any{
+			"license_id": granted.ID, "from_plan_id": nextUpgrade.FromPlanID,
+			"to_plan_id": nextUpgrade.ToPlanID, "period_end": granted.ValidUntil,
+			"reason": "next_cycle_upgrade",
+		})
+	}
 	s.afterPaid(ctx, paid, granted, providerName)
 	return nil
+}
+
+// settleUpgrade applies the plan change an upgrade order paid for, marks
+// the order paid and records the matched transfer in one transaction. The
+// upgrade row is the receipt that ties the money to the plan change; an
+// order without one is refused rather than granted the plan it names.
+// A duplicated delivery is absorbed by the same two guards a renewal uses.
+func (s *Service) settleUpgrade(ctx context.Context, order *model.PaymentOrder, providerName string, ev provider.WebhookEvent) error {
+	plan, err := s.Store.FindPlanByID(ctx, order.PlanID)
+	if err != nil {
+		return s.failGrant(ctx, order, providerName, ev, fmt.Errorf("read plan: %w", err))
+	}
+	var paid, alreadySettled *model.PaymentOrder
+	var granted *model.License
+	var upgrade *model.LicenseUpgrade
+	err = s.Store.RunInTx(ctx, func(ctx context.Context, tx bun.Tx) error {
+		locked, err := s.Store.GetPaymentOrderForUpdate(ctx, tx, order.ID)
+		if err != nil {
+			return err
+		}
+		if locked.Status == domain.OrderPaid {
+			alreadySettled = locked
+			return nil
+		}
+		if domain.IsOrderTerminal(locked.Status) {
+			return store.ErrOrderNotPayable
+		}
+		if locked.LicenseID == "" {
+			return fmt.Errorf("%w: order %s names no licence", store.ErrUpgradeInvalid, locked.Code)
+		}
+		// Lock the licence before the upgrade row. A renewal settlement
+		// takes the licence first and then the next-cycle row; taking the
+		// two in the same order here keeps the two settlements from
+		// deadlocking on a licence that is being renewed and upgraded at
+		// once.
+		var held model.License
+		if err := tx.NewSelect().Model(&held).Where("id = ?", locked.LicenseID).For("UPDATE").Scan(ctx); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("%w: licence %s not found", store.ErrUpgradeIneligible, locked.LicenseID)
+			}
+			return err
+		}
+		upgrade, err = s.Store.FindUpgradeByPaymentOrderIn(ctx, tx, locked.ID)
+		if err != nil {
+			return err
+		}
+		if upgrade, err = s.Store.ApplyUpgradeFromOrderIn(ctx, tx, locked, plan); err != nil {
+			return err
+		}
+		granted, err = s.Store.FindLicenseByIDIn(ctx, tx, locked.LicenseID)
+		if err != nil {
+			return err
+		}
+		paid, err = s.Store.MarkPaymentOrderPaid(ctx, tx, order.ID, time.Now())
+		if err != nil {
+			return err
+		}
+		if _, err := tx.NewUpdate().Model((*model.PaymentOrder)(nil)).
+			Set("license_id = ?", granted.ID).Where("id = ?", paid.ID).Exec(ctx); err != nil {
+			return err
+		}
+		paid.LicenseID = granted.ID
+		return s.matchTransaction(ctx, tx, providerName, paid, ev)
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrOrderNotPayable) {
+			return s.settleNotPayable(ctx, order, providerName, ev, err)
+		}
+		return s.failGrant(ctx, order, providerName, ev, err)
+	}
+	if alreadySettled != nil {
+		return nil
+	}
+	s.dispatchPaid(ctx, paid, granted, providerName, ev)
+	if s.Webhooks != nil && upgrade != nil {
+		s.Webhooks.Dispatch(ctx, granted.ProductID, model.EventPlanChanged, map[string]any{
+			"license_id": granted.ID, "from_plan_id": upgrade.FromPlanID,
+			"to_plan_id": plan.ID, "period_end": paid.PeriodEnd,
+			"reason": "paid_change",
+		})
+	}
+	s.afterPaid(ctx, paid, granted, providerName)
+	return nil
+}
+
+// settleTrialConversion converts the trial licence a paid kind-new order
+// names, in place, and marks the order paid in the same transaction. The
+// trial licence id is the order metadata's; no second licence is minted.
+func (s *Service) settleTrialConversion(ctx context.Context, order *model.PaymentOrder, trialLicenseID, providerName string, ev provider.WebhookEvent) error {
+	plan, err := s.Store.FindPlanByID(ctx, order.PlanID)
+	if err != nil {
+		return s.failGrant(ctx, order, providerName, ev, fmt.Errorf("read plan: %w", err))
+	}
+	// Read before the transaction for the event's old plan; the conversion
+	// itself validates and locks the row again.
+	trial, err := s.Store.FindLicenseByID(ctx, trialLicenseID)
+	if err != nil {
+		return s.failGrant(ctx, order, providerName, ev,
+			fmt.Errorf("%w: trial licence %s not found", store.ErrTrialConversionInvalid, trialLicenseID))
+	}
+	var paid, alreadySettled *model.PaymentOrder
+	var granted *model.License
+	err = s.Store.RunInTx(ctx, func(ctx context.Context, tx bun.Tx) error {
+		locked, err := s.Store.GetPaymentOrderForUpdate(ctx, tx, order.ID)
+		if err != nil {
+			return err
+		}
+		if locked.Status == domain.OrderPaid {
+			alreadySettled = locked
+			return nil
+		}
+		if domain.IsOrderTerminal(locked.Status) {
+			return store.ErrOrderNotPayable
+		}
+		granted, err = s.Store.ConvertTrialLicenseFromOrderIn(ctx, tx, locked, plan)
+		if err != nil {
+			return err
+		}
+		paid, err = s.Store.MarkPaymentOrderPaid(ctx, tx, order.ID, time.Now())
+		if err != nil {
+			return err
+		}
+		if _, err := tx.NewUpdate().Model((*model.PaymentOrder)(nil)).
+			Set("license_id = ?", granted.ID).Where("id = ?", paid.ID).Exec(ctx); err != nil {
+			return err
+		}
+		paid.LicenseID = granted.ID
+		return s.matchTransaction(ctx, tx, providerName, paid, ev)
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrOrderNotPayable) {
+			return s.settleNotPayable(ctx, order, providerName, ev, err)
+		}
+		return s.failGrant(ctx, order, providerName, ev, err)
+	}
+	if alreadySettled != nil {
+		return nil
+	}
+	s.dispatchPaid(ctx, paid, granted, providerName, ev)
+	if s.Webhooks != nil {
+		s.Webhooks.Dispatch(ctx, granted.ProductID, model.EventPlanChanged, map[string]any{
+			"license_id": granted.ID, "from_plan_id": trial.PlanID,
+			"to_plan_id": plan.ID, "period_end": granted.ValidUntil,
+			"reason": "trial_conversion",
+		})
+	}
+	s.afterPaid(ctx, paid, granted, providerName)
+	return nil
+}
+
+// trialConversionLicenseID reads the trial licence a conversion order
+// carries in metadata.billing. Any other new order has none.
+func trialConversionLicenseID(order *model.PaymentOrder) (string, bool) {
+	if order == nil || len(order.Metadata) == 0 {
+		return "", false
+	}
+	var meta struct {
+		Billing struct {
+			Source         string `json:"source"`
+			TrialLicenseID string `json:"trial_license_id"`
+		} `json:"billing"`
+	}
+	if err := json.Unmarshal(order.Metadata, &meta); err != nil {
+		return "", false
+	}
+	if meta.Billing.Source != "trial_conversion" {
+		return "", false
+	}
+	return meta.Billing.TrialLicenseID, true
 }
 
 // applyNonPaid records a provider event that is not a payment and, when
