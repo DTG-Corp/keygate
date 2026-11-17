@@ -346,19 +346,35 @@ func (s *Store) CancelPaymentOrder(ctx context.Context, code string) (*model.Pay
 }
 
 // ExpirePaymentOrders moves every pending order whose expires_at has
-// passed to expired, and reports how many it moved. Only pending rows
-// are touched: a paid order keeps its status even if its expiry is in the
-// past, which is what lets a late bank transfer be recorded rather than
-// treated as unpaid.
+// passed to expired, and reports how many it moved. It is the count-only
+// spelling of ExpirePaymentOrdersWithRows for callers that do not need
+// the rows.
 func (s *Store) ExpirePaymentOrders(ctx context.Context, now time.Time) (int, error) {
-	res, err := s.DB.NewUpdate().Model((*model.PaymentOrder)(nil)).
-		Set("status = ?", domain.OrderExpired).Set("updated_at = ?", now).
-		Where("status = ?", domain.OrderPending).Where("expires_at < ?", now).Exec(ctx)
+	rows, err := s.ExpirePaymentOrdersWithRows(ctx, now)
 	if err != nil {
 		return 0, err
 	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
+	return len(rows), nil
+}
+
+// ExpirePaymentOrdersWithRows moves every pending order whose expires_at
+// has passed to expired and returns the rows it moved, so the caller can
+// announce each transition. Only pending rows are touched: a paid order
+// keeps its status even if its expiry is in the past, which is what lets
+// a late bank transfer be recorded rather than treated as unpaid. The
+// two callers share one statement, so a row can never be counted by the
+// old path and missed by the event path.
+func (s *Store) ExpirePaymentOrdersWithRows(ctx context.Context, now time.Time) ([]*model.PaymentOrder, error) {
+	var rows []*model.PaymentOrder
+	err := s.DB.NewRaw(
+		`UPDATE payment_orders SET status = ?, updated_at = ?
+		 WHERE status = ? AND expires_at < ? RETURNING *`,
+		domain.OrderExpired, now, domain.OrderPending, now,
+	).Scan(ctx, &rows)
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 // CreatePaymentAttempt writes one provider instruction for an order,

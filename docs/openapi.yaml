@@ -3131,6 +3131,293 @@ paths:
           description: "`UPGRADE_UNAVAILABLE`, the plan's Stripe price can't be sold right now"
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
 
+  /portal/payments/orders:
+    get:
+      tags: [Portal]
+      summary: The signed-in customer's payment orders
+      description: |
+        Phase 1b. Requires a portal session; no API key. Matches the order
+        email or the order's buyer JSON `email` to the session email
+        (case-insensitive), newest first. Paginated (default 50, max 200).
+        Returns `data.orders[]` plus `total`, `limit`, `offset`.
+      operationId: portalListPaymentOrders
+      security: [{ CookieAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageOffset"
+      responses:
+        "200":
+          description: A page of the customer's orders
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      orders:
+                        type: array
+                        items: { $ref: "#/components/schemas/PaymentOrder" }
+                      total: { type: integer }
+                      limit: { type: integer }
+                      offset: { type: integer }
+        "401":
+          $ref: "#/components/responses/SessionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /portal/payments/orders/{code}:
+    get:
+      tags: [Portal]
+      summary: One of the customer's orders and its instruction
+      description: |
+        A code belonging to another customer answers exactly like an
+        unknown one: `404 PAYMENT_ORDER_NOT_FOUND`. `payment` is absent
+        when no attempt exists.
+      operationId: portalGetPaymentOrder
+      security: [{ CookieAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PaymentOrderCode"
+      responses:
+        "200":
+          description: The order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/PaymentOrder" }
+        "401":
+          $ref: "#/components/responses/SessionRequired"
+        "404":
+          description: "`PAYMENT_ORDER_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /portal/payments/orders/{code}/pay:
+    post:
+      tags: [Portal]
+      summary: Re-issue the instruction for a pending order
+      description: |
+        Refreshes the provider instruction for a pending, unexpired order.
+        Never re-prices and never creates a second order. A paid, expired,
+        canceled or refunded order is `409 PAYMENT_ORDER_NOT_PAYABLE`
+        before any provider call. A missing provider is `503
+        PAYMENT_PROVIDER_DISABLED`; a provider failure is `502
+        PAYMENT_PROVIDER_ERROR`. No request body.
+      operationId: portalPayPaymentOrder
+      security: [{ CookieAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PaymentOrderCode"
+      responses:
+        "200":
+          description: The order and the refreshed instruction
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/PaymentOrder" }
+        "401":
+          $ref: "#/components/responses/SessionRequired"
+        "404":
+          description: "`PAYMENT_ORDER_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: "`PAYMENT_ORDER_NOT_PAYABLE`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "502":
+          description: "`PAYMENT_PROVIDER_ERROR`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "503":
+          description: "`PAYMENT_PROVIDER_DISABLED`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /portal/payments/orders/{code}/cancel:
+    post:
+      tags: [Portal]
+      summary: Cancel a pending order
+      description: |
+        Cancels only a pending order; a second cancel or a paid order is
+        `409 PAYMENT_ORDER_NOT_PAYABLE`. Does not call the provider and has
+        no licence effect. Emits `order.canceled` exactly once on the
+        transition.
+      operationId: portalCancelPaymentOrder
+      security: [{ CookieAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PaymentOrderCode"
+      responses:
+        "200":
+          description: The canceled order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/PaymentOrder" }
+        "401":
+          $ref: "#/components/responses/SessionRequired"
+        "404":
+          description: "`PAYMENT_ORDER_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: "`PAYMENT_ORDER_NOT_PAYABLE`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /portal/invoices:
+    get:
+      tags: [Portal]
+      summary: The signed-in customer's invoices
+      description: |
+        Phase 1b. Matches the invoice buyer email, or the email of the order
+        the invoice was issued for, to the session email. Returns
+        `data.invoices[]` plus the page numbers. Internal PDF paths and
+        e-invoice refs are not included.
+      operationId: portalListInvoices
+      security: [{ CookieAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageOffset"
+      responses:
+        "200":
+          description: A page of the customer's invoices
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      invoices:
+                        type: array
+                        items: { $ref: "#/components/schemas/Invoice" }
+                      total: { type: integer }
+                      limit: { type: integer }
+                      offset: { type: integer }
+        "401":
+          $ref: "#/components/responses/SessionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /portal/invoices/{id}:
+    get:
+      tags: [Portal]
+      summary: One of the customer's invoices, or its PDF
+      description: |
+        A foreign or unknown id is `404 INVOICE_NOT_FOUND` before any PDF
+        is fetched. `format=pdf` streams the PDF with
+        `Cache-Control: private, no-store`; any other `format` is `400
+        BAD_REQUEST`.
+      operationId: portalGetInvoice
+      security: [{ CookieAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: format
+          in: query
+          schema: { type: string, enum: [pdf] }
+      responses:
+        "200":
+          description: The invoice JSON, or its PDF when `format=pdf`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvoiceEnvelope" }
+            application/pdf:
+              schema: { type: string, format: binary }
+        "400":
+          description: "`BAD_REQUEST`: unsupported `format`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/SessionRequired"
+        "404":
+          description: "`INVOICE_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /portal/billing-profile:
+    get:
+      tags: [Portal]
+      summary: The saved buyer/tax block
+      description: |
+        One row per user. Answers `{"buyer": {}}` when nothing is saved.
+      operationId: portalGetBillingProfile
+      security: [{ CookieAuth: [] }]
+      responses:
+        "200":
+          description: The stored buyer block
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      buyer: { $ref: "#/components/schemas/PortalBillingProfile" }
+        "401":
+          $ref: "#/components/responses/SessionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    put:
+      tags: [Portal]
+      summary: Validate and upsert the buyer/tax block
+      description: |
+        Accepts the flat object or `{"buyer": {...}}`. Fields are trimmed;
+        `name` is required; `request_invoice=true` with an empty
+        `tax_code` is `422 PAYMENT_TAX_CODE_REQUIRED`. A successful write
+        is audited; a rejected one writes nothing.
+      operationId: portalSaveBillingProfile
+      security: [{ CookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/PortalBillingProfile"
+                - type: object
+                  properties:
+                    buyer: { $ref: "#/components/schemas/PortalBillingProfile" }
+      responses:
+        "200":
+          description: The saved buyer block
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      buyer: { $ref: "#/components/schemas/PortalBillingProfile" }
+        "400":
+          description: "`BAD_REQUEST`: malformed JSON, missing/blank `name`, or an over-long field."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/SessionRequired"
+        "422":
+          description: "`PAYMENT_TAX_CODE_REQUIRED`: `request_invoice=true` without a `tax_code`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /admin/licenses:
     get:
       tags: [Admin Licenses]
@@ -5736,6 +6023,115 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /payments/quote:
+    post:
+      tags: [Payments]
+      summary: Price a plan with coupons (dry run)
+      description: |
+        Phase 1b. Prices a plan and its coupons without creating an
+        order, an attempt or a redemption. Public but rate-limited by
+        `payments_public`. A rejected coupon is the matching
+        `PAYMENT_COUPON_*` code; with `ignore_invalid_coupons` the code
+        is dropped. Module B owns the exact response keys and rounding —
+        **verify after merge** before publishing.
+      operationId: quotePayment
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan_id, quantity]
+              properties:
+                plan_id: { type: string, format: uuid }
+                quantity: { type: integer, minimum: 1, maximum: 100 }
+                email: { type: string, format: email }
+                coupon_codes:
+                  type: array
+                  maxItems: 20
+                  items: { type: string }
+                ignore_invalid_coupons: { type: boolean, default: false }
+      responses:
+        "200":
+          description: The priced total; nothing was created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    required: [subtotal_minor, discount_minor, tax_minor, total_minor, currency, currency_exponent]
+                    properties:
+                      subtotal_minor: { type: integer, format: int64 }
+                      discount_minor: { type: integer, format: int64 }
+                      tax_minor: { type: integer, format: int64 }
+                      total_minor: { type: integer, format: int64 }
+                      currency: { type: string, example: VND }
+                      currency_exponent: { type: integer, example: 0 }
+                      discounts:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            code: { type: string }
+                            type: { type: string, enum: [percent, fixed, trial] }
+                            amount_minor: { type: integer, format: int64 }
+        "400":
+          description: "`BAD_REQUEST`: malformed JSON. `INVALID_QUANTITY`: quantity outside 1–100."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "422":
+          description: "`PAYMENT_PRICE_NOT_CONFIGURED` or a `PAYMENT_COUPON_*` refusal."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /payments/invoices/{id}:
+    get:
+      tags: [Payments]
+      summary: Read an invoice, or stream its PDF
+      description: |
+        Phase 1b. Requires `payments:read` or `payments:write`, and the
+        invoice's order must belong to the key's product; a foreign id is
+        `404 INVOICE_NOT_FOUND`, the same as an unknown one. `format=pdf`
+        streams a raw PDF body (`application/pdf`,
+        `Cache-Control: private, no-store`); any other `format` is
+        `400 BAD_REQUEST`.
+      operationId: getPaymentInvoice
+      x-required-scopes: ["payments:read", "payments:write"]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: format
+          in: query
+          schema: { type: string, enum: [pdf] }
+      responses:
+        "200":
+          description: The invoice JSON, or its PDF when `format=pdf`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvoiceEnvelope" }
+            application/pdf:
+              schema: { type: string, format: binary }
+        "400":
+          description: "`BAD_REQUEST`: unsupported `format`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`INVOICE_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /pay/{checkout_id}/status:
     servers:
       - url: "{server}"
@@ -6738,6 +7134,572 @@ paths:
         "503":
           description: "`PAYMENT_PROVIDER_DISABLED`"
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /admin/coupons:
+    get:
+      tags: [Payments Admin]
+      summary: List coupons
+      description: |
+        Phase 1b, module B. Filters `q`, `active`, `stack_group`,
+        `scope_type`; paginated. The row shape is module B's — **verify
+        after merge**.
+      operationId: adminListCoupons
+      x-required-scopes: [admin]
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: active
+          in: query
+          schema: { type: boolean }
+        - name: stack_group
+          in: query
+          schema: { type: string }
+        - name: scope_type
+          in: query
+          schema: { type: string, enum: [product, plan] }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageOffset"
+      responses:
+        "200":
+          description: A page of coupons
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      coupons:
+                        type: array
+                        items: { $ref: "#/components/schemas/Coupon" }
+                      total: { type: integer }
+                      limit: { type: integer }
+                      offset: { type: integer }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    post:
+      tags: [Payments Admin]
+      summary: Create a coupon
+      description: |
+        Phase 1b, module B. Creates the coupon and replaces `scopes[]` in
+        one transaction. A duplicate code is a conflict (module code —
+        **verify after merge**). Audited.
+      operationId: adminCreateCoupon
+      x-required-scopes: [admin]
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CouponInput" }
+      responses:
+        "201":
+          description: The created coupon
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Coupon" }
+        "400":
+          description: "`BAD_REQUEST`: malformed JSON or an invalid field."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "409":
+          description: "The coupon code already exists (module code — verify after merge)."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/coupons/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Payments Admin]
+      summary: One coupon
+      operationId: adminGetCoupon
+      x-required-scopes: [admin]
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      responses:
+        "200":
+          description: The coupon
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Coupon" }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "Coupon not found (module code — verify after merge)."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    put:
+      tags: [Payments Admin]
+      summary: Update a coupon
+      description: Scopes are replaced atomically. Audited.
+      operationId: adminUpdateCoupon
+      x-required-scopes: [admin]
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CouponInput" }
+      responses:
+        "200":
+          description: The updated coupon
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data: { $ref: "#/components/schemas/Coupon" }
+        "400":
+          description: "`BAD_REQUEST`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "Coupon not found."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [Payments Admin]
+      summary: Delete or archive a coupon
+      description: |
+        Deletes only a coupon with no redemptions; otherwise sets
+        `active=false`. `409` when it still has redemptions and cannot be
+        archived (module code — verify after merge). Audited.
+      operationId: adminDeleteCoupon
+      x-required-scopes: [admin]
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      responses:
+        "204":
+          description: Deleted or archived
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "Coupon not found."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: "The coupon has redemptions and cannot be deleted."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /admin/coupons/{id}/redemptions:
+    get:
+      tags: [Payments Admin]
+      summary: One coupon's redemption history
+      operationId: adminCouponRedemptions
+      x-required-scopes: [admin]
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageOffset"
+      responses:
+        "200":
+          description: Redemptions for this coupon
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      redemptions:
+                        type: array
+                        items: { $ref: "#/components/schemas/CouponRedemption" }
+                      total: { type: integer }
+                      limit: { type: integer }
+                      offset: { type: integer }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+
+  /admin/payments/redemptions:
+    get:
+      tags: [Payments Admin]
+      summary: Global redemption history, or a CSV of it
+      description: |
+        Phase 1b, module B. Filters `coupon`, `email`, `from`, `to`.
+        `format=csv` returns a raw `text/csv` attachment with a header row.
+      operationId: adminListRedemptions
+      x-required-scopes: [admin]
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters:
+        - name: coupon
+          in: query
+          schema: { type: string }
+        - name: email
+          in: query
+          schema: { type: string, format: email }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - name: format
+          in: query
+          schema: { type: string, enum: [csv] }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageOffset"
+      responses:
+        "200":
+          description: Redemptions, or their CSV when `format=csv`
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      redemptions:
+                        type: array
+                        items: { $ref: "#/components/schemas/CouponRedemption" }
+                      total: { type: integer }
+                      limit: { type: integer }
+                      offset: { type: integer }
+                      summary:
+                        type: object
+                        additionalProperties: true
+            text/csv:
+              schema: { type: string, format: binary }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/invoices:
+    get:
+      tags: [Payments Admin]
+      summary: Invoice list
+      description: |
+        Phase 1b, module C. Filters `status`, `number`, `order_code`,
+        `email`, `from`, `to`; paginated. Row shape follows `Invoice`;
+        internal PDF paths are admin-only. **Verify after merge.**
+      operationId: adminListInvoices
+      x-required-scopes: [admin]
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [draft, issued, pending_issue, void] }
+        - name: number
+          in: query
+          schema: { type: string }
+        - name: order_code
+          in: query
+          schema: { type: string }
+        - name: email
+          in: query
+          schema: { type: string, format: email }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/PageOffset"
+      responses:
+        "200":
+          description: A page of invoices
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      invoices:
+                        type: array
+                        items: { $ref: "#/components/schemas/Invoice" }
+                      total: { type: integer }
+                      limit: { type: integer }
+                      offset: { type: integer }
+        "400":
+          description: "`INVALID_STATUS`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/invoices/{id}:
+    get:
+      tags: [Payments Admin]
+      summary: One invoice with buyer and items
+      operationId: adminGetInvoice
+      x-required-scopes: [admin]
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The invoice
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvoiceEnvelope" }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`INVOICE_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /admin/payments/invoices/{id}/pdf:
+    get:
+      tags: [Payments Admin]
+      summary: Stream an invoice PDF
+      description: "Raw `application/pdf` body with `Cache-Control: private, no-store`."
+      operationId: adminInvoicePDF
+      x-required-scopes: [admin]
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The PDF
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`INVOICE_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /admin/payments/invoices/{id}/issue:
+    post:
+      tags: [Payments Admin]
+      summary: Issue a draft invoice or retry its e-invoice
+      description: |
+        A draft becomes `issued`, or `pending_issue` when an e-invoice
+        provider is configured but not wired; the latter is the operator's
+        manual queue. Emits `invoice.issued` once. Issuing an already
+        issued or void row is `409 INVOICE_ALREADY_ISSUED`; a provider
+        failure is `502 EINVOICE_PROVIDER_ERROR`. Audited.
+      operationId: adminIssueInvoice
+      x-required-scopes: [admin]
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The updated invoice
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvoiceEnvelope" }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`INVOICE_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: "`INVOICE_ALREADY_ISSUED`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "502":
+          description: "`EINVOICE_PROVIDER_ERROR`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /admin/payments/invoices/{id}/void:
+    post:
+      tags: [Payments Admin]
+      summary: Void an issued invoice
+      description: |
+        Keeps the number (it is never reused), emits `invoice.voided`
+        once, and changes no order or licence. Voiding a draft or an
+        already void row is `409 INVOICE_ALREADY_ISSUED`.
+      operationId: adminVoidInvoice
+      x-required-scopes: [admin]
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The voided invoice
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvoiceEnvelope" }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "404":
+          description: "`INVOICE_NOT_FOUND`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: "`INVOICE_ALREADY_ISSUED`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /admin/payments/reports/revenue:
+    get:
+      tags: [Payments Admin]
+      summary: Revenue report
+      description: |
+        Phase 1b, module C. Groups by `provider`, `plan`, `product` or
+        `period`; paid orders net of recorded refunds, integer minor
+        units. `format=csv` is a raw `text/csv` attachment. Column names
+        are module C's — **verify after merge**.
+      operationId: adminRevenueReport
+      x-required-scopes: [admin]
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters:
+        - name: group_by
+          in: query
+          schema: { type: string, enum: [provider, plan, product, period] }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - name: format
+          in: query
+          schema: { type: string, enum: [csv] }
+      responses:
+        "200":
+          description: Report rows, or their CSV
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportEnvelope" }
+            text/csv:
+              schema: { type: string, format: binary }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/reports/reconciliation:
+    get:
+      tags: [Payments Admin]
+      summary: Daily reconciliation and drift
+      description: |
+        Phase 1b, module C. Settled ledger totals versus provider-reported
+        totals by day, with unmatched and amount-mismatch counts. Column
+        names are module C's — **verify after merge**.
+      operationId: adminReconciliationReport
+      x-required-scopes: [admin]
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters:
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+        - name: format
+          in: query
+          schema: { type: string, enum: [csv] }
+      responses:
+        "200":
+          description: Reconciliation rows, or their CSV
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportEnvelope" }
+            text/csv:
+              schema: { type: string, format: binary }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/payments/reports/vat:
+    get:
+      tags: [Payments Admin]
+      summary: VAT report
+      description: |
+        Phase 1b, module C. Output VAT contained in paid totals per
+        period, integer minor units; it is not a second tax charge. Column
+        names are module C's — **verify after merge**.
+      operationId: adminVATReport
+      x-required-scopes: [admin]
+      security: [{ BearerAuth: [] }, { CookieAuth: [] }]
+      parameters:
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+        - name: format
+          in: query
+          schema: { type: string, enum: [csv] }
+      responses:
+        "200":
+          description: VAT rows, or their CSV
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportEnvelope" }
+            text/csv:
+              schema: { type: string, format: binary }
+        "401":
+          $ref: "#/components/responses/AdminUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /admin/plans/{id}/prices:
     get:
@@ -8483,6 +9445,16 @@ components:
         - release.published
         - release.yanked
         - release.unyanked
+        - order.created
+        - order.paid
+        - order.expired
+        - order.canceled
+        - payment.succeeded
+        - payment.failed
+        - payment.refunded
+        - invoice.issued
+        - invoice.voided
+        - license.renewal_due
 
     WebhookPayload:
       type: object
@@ -8595,10 +9567,12 @@ components:
       description: |
         A payment order. Consumer create/get return the fields below
         (minus `id`, `numeric_code`, `created_at`, `updated_at`, `buyer`
-        and `metadata`, which are admin projections). List rows omit
+        and `metadata`, which are admin projections). Portal orders use
+        the same projection scoped by the session email. List rows omit
         `subtotal_minor`, `discount_minor`, `tax_minor` and `payment`.
         `amount` is always `*_minor`: VND has exponent 0, so an integer
-        is đồng. `discount_minor` is 0 in phase 1a.
+        is đồng. `discount_minor` is the coupon discount (0 when none
+        applied) and `total_minor` is what is charged.
       required: [code, status, kind, provider, product_id, plan_id, email, quantity, total_minor, currency, currency_exponent, expires_at]
       properties:
         id: { type: string, format: uuid }
@@ -8631,8 +9605,11 @@ components:
             name: { type: string }
             email: { type: string }
             phone: { type: string }
-            tax_id: { type: string }
+            tax_id: { type: string, description: "Phase 1a spelling; phase 1b also accepts `tax_code`." }
+            tax_code: { type: string }
+            company_name: { type: string }
             address: { type: string }
+            request_invoice: { type: boolean }
         metadata:
           type: object
           additionalProperties: true
@@ -8813,3 +9790,158 @@ components:
             counterAccountNumber: { type: string }
             virtualAccountName: { type: string }
             virtualAccountNumber: { type: string }
+
+    InvoiceItem:
+      type: object
+      description: One frozen invoice line, snapshotted at payment time.
+      required: [description, quantity, unit_amount_minor, amount_minor]
+      properties:
+        description: { type: string }
+        plan_id: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1 }
+        unit_amount_minor: { type: integer, format: int64 }
+        amount_minor: { type: integer, format: int64 }
+        tax_rate_bp: { type: integer, description: Tax rate in basis points. }
+
+    Invoice:
+      type: object
+      description: |
+        The immutable record of what a paid order billed. `buyer` and
+        `items` are JSON snapshots. Internal `pdf_path` and e-invoice refs
+        are admin-only and are not part of the consumer/portal projection.
+      properties:
+        id: { type: string }
+        number: { type: string, example: "KG-2026-000001" }
+        order_id: { type: string, format: uuid }
+        license_id: { type: string, format: uuid }
+        status: { type: string, enum: [draft, issued, pending_issue, void] }
+        buyer:
+          type: object
+          additionalProperties: true
+          description: Frozen buyer/tax block from the order.
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/InvoiceItem" }
+        subtotal_minor: { type: integer, format: int64 }
+        discount_minor: { type: integer, format: int64 }
+        tax_minor: { type: integer, format: int64 }
+        total_minor: { type: integer, format: int64 }
+        currency: { type: string, example: VND }
+        currency_exponent: { type: integer, example: 0 }
+        issued_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+
+    InvoiceEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data: { $ref: "#/components/schemas/Invoice" }
+
+    PortalBillingProfile:
+      type: object
+      description: |
+        The buyer/tax block saved for one portal user. `name` is required
+        on save; a GET with nothing saved returns `{}`. `tax_code` is
+        required when `request_invoice` is true.
+      properties:
+        name: { type: string, maxLength: 200 }
+        company_name: { type: string, maxLength: 200 }
+        tax_code: { type: string, maxLength: 50 }
+        address: { type: string, maxLength: 500 }
+        email: { type: string, maxLength: 200 }
+        phone: { type: string, maxLength: 50 }
+        request_invoice: { type: boolean }
+
+    CouponScope:
+      type: object
+      required: [scope_type, scope_id]
+      properties:
+        scope_type: { type: string, enum: [product, plan] }
+        scope_id: { type: string, format: uuid }
+
+    Coupon:
+      type: object
+      description: |
+        Phase 1b coupon. Module B owns the final row shape — **verify
+        after merge**. `value` is basis points for `percent`, minor units
+        for `fixed`, and ignored for `trial`.
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        description: { type: string }
+        type: { type: string, enum: [percent, fixed, trial] }
+        value: { type: integer, format: int64 }
+        trial_days: { type: integer }
+        currency: { type: string, example: VND }
+        active: { type: boolean }
+        valid_from: { type: string, format: date-time }
+        valid_to: { type: string, format: date-time }
+        max_redemptions: { type: integer, description: "0 = unlimited" }
+        redeemed_count: { type: integer }
+        per_customer_limit: { type: integer, description: "0 = unlimited" }
+        stack_group: { type: string, enum: [general, campaign, private] }
+        stackable: { type: boolean }
+        priority: { type: integer, description: "Lower is applied first." }
+        assigned_email: { type: string, format: email }
+        scopes:
+          type: array
+          items: { $ref: "#/components/schemas/CouponScope" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CouponInput:
+      type: object
+      required: [code, type, value]
+      description: Create/update body; `scopes[]` replaces the stored set atomically.
+      properties:
+        code: { type: string }
+        description: { type: string }
+        type: { type: string, enum: [percent, fixed, trial] }
+        value: { type: integer, format: int64 }
+        trial_days: { type: integer }
+        currency: { type: string, example: VND }
+        active: { type: boolean }
+        valid_from: { type: string, format: date-time }
+        valid_to: { type: string, format: date-time }
+        max_redemptions: { type: integer }
+        per_customer_limit: { type: integer }
+        stack_group: { type: string, enum: [general, campaign, private] }
+        stackable: { type: boolean }
+        priority: { type: integer }
+        assigned_email: { type: string, format: email }
+        scopes:
+          type: array
+          items: { $ref: "#/components/schemas/CouponScope" }
+
+    CouponRedemption:
+      type: object
+      description: One coupon consumed by one settled order. Module B owns the row shape.
+      properties:
+        id: { type: string, format: uuid }
+        coupon_id: { type: string, format: uuid }
+        coupon_code: { type: string }
+        order_id: { type: string, format: uuid }
+        order_code: { type: string }
+        email: { type: string, format: email }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string, example: VND }
+        created_at: { type: string, format: date-time }
+
+    ReportEnvelope:
+      type: object
+      description: |
+        Report rows. Module C owns the column names — **verify after
+        merge**; money is integer minor units.
+      properties:
+        success: { type: boolean, example: true }
+        data:
+          type: object
+          properties:
+            rows:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
+            totals:
+              type: object
+              additionalProperties: true

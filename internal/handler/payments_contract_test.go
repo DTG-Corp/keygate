@@ -33,6 +33,7 @@ var paymentSourceFiles = []string{
 	"payments_api.go",
 	"payments_webhook.go",
 	"payments_admin.go",
+	"payments_portal.go",
 	"payment_providers_admin.go",
 	"plan_prices_admin.go",
 	"payments_invoices_admin.go",

@@ -13,6 +13,7 @@ import (
 	"github.com/tabloy/keygate/internal/payment/checkout"
 	"github.com/tabloy/keygate/internal/payment/coupons"
 	"github.com/tabloy/keygate/internal/payment/provider"
+	"github.com/tabloy/keygate/internal/service"
 	"github.com/tabloy/keygate/internal/store"
 	"github.com/tabloy/keygate/pkg/response"
 )
@@ -24,6 +25,8 @@ import (
 type PaymentsAPIHandler struct {
 	Checkout *checkout.Service
 	Store    *store.Store
+	// Events announces a buyer's cancel to webhook subscribers. Optional.
+	Events *service.OrderEventEmitter
 }
 
 type createOrderRequest struct {
@@ -193,6 +196,7 @@ func (h *PaymentsAPIHandler) Cancel(c *gin.Context) {
 		response.Internal(c, err)
 		return
 	}
+	h.Events.OrderCanceled(c, order)
 	response.OK(c, orderView(&checkout.OrderResult{Order: order}))
 }
 
