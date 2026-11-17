@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/dtg-corp/dsoft/internal/model"
 	"github.com/dtg-corp/dsoft/internal/store"
 	"github.com/dtg-corp/dsoft/internal/testsupport"
+	"github.com/gin-gonic/gin"
 )
 
 func TestNormalizeMaintenance(t *testing.T) {

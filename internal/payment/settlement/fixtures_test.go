@@ -71,7 +71,7 @@ func webhookFixture(t *testing.T, s *store.Store, productID string, events ...st
 	t.Helper()
 	ctx := context.Background()
 	wh := &model.Webhook{
-		ProductID: productID, URL: "http://127.0.0.1:1/keygate-hook",
+		ProductID: productID, URL: "http://127.0.0.1:1/dsoft-hook",
 		Secret: "test-secret", Events: events, Active: true,
 	}
 	if err := s.CreateWebhook(ctx, wh); err != nil {

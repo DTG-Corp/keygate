@@ -16,7 +16,7 @@ import (
 
 // Plans sold per seat (issue #41). The buyer pays Stripe for a quantity
 // and the licence holds what that quantity buys (model.Plan.Limits).
-// Stripe is the record of the quantity: Keygate asks Stripe for a
+// Stripe is the record of the quantity: DSoft asks Stripe for a
 // change, and the licence takes the new quantity from a read of the
 // subscription after Stripe applied it. The one exception is a
 // downgrade, which the licence takes just before Stripe is asked (so
@@ -83,7 +83,7 @@ func subscriptionQuantity(sub *stripe.Subscription) int {
 }
 
 // clampQuantity keeps a quantity read from Stripe inside what a licence
-// row holds: at least one, and no more than an int carries. Keygate never
+// row holds: at least one, and no more than an int carries. DSoft never
 // sells fewer than one (min_quantity is at least 1); a subscription the
 // seller set to 0 in Stripe keeps its owner's licence, as any licence on
 // it would.

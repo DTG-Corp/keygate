@@ -1,6 +1,6 @@
-# Keygate Makefile
+# DSoft Makefile
 
-APP       := keygate
+APP       := dsoft
 GO        := go
 BUN       := bun
 BIN       := bin/$(APP)
@@ -99,7 +99,7 @@ docker-down: ## Stop Docker Compose
 
 .PHONY: docker-logs
 docker-logs: ## Tail Docker Compose logs
-	docker compose logs -f keygate
+	docker compose logs -f dsoft
 
 # ─── Clean ────────────────────────────────────────
 

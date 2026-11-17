@@ -20,9 +20,9 @@ import (
 // the zone is fixed at process start, so the check runs in a child process
 // started with TZ set.
 func TestTrialEndingMailDateIsUTCWhateverTheServerZone(t *testing.T) {
-	if os.Getenv("KEYGATE_TRIAL_DATE_CHILD") == "" {
+	if os.Getenv("DSOFT_TRIAL_DATE_CHILD") == "" {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestTrialEndingMailDateIsUTCWhateverTheServerZone$", "-test.v")
-		cmd.Env = append(os.Environ(), "TZ=Pacific/Auckland", "KEYGATE_TRIAL_DATE_CHILD=1")
+		cmd.Env = append(os.Environ(), "TZ=Pacific/Auckland", "DSOFT_TRIAL_DATE_CHILD=1")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("child: %v\n%s", err, out)
 		} else if strings.Contains(string(out), "--- SKIP") {
@@ -81,7 +81,7 @@ func TestTrialEndingMailDateIsUTCWhateverTheServerZone(t *testing.T) {
 		}
 	}()
 	host, port, _ := net.SplitHostPort(l.Addr().String())
-	h := &StripeHandler{Store: s, Email: service.NewEmailService(host, port, "", "", "keygate@test.local", slog.Default(), s)}
+	h := &StripeHandler{Store: s, Email: service.NewEmailService(host, port, "", "", "dsoft@test.local", slog.Default(), s)}
 
 	// 23:30 UTC on the 6th is already the 7th in Auckland.
 	trialEnd := time.Date(2026, 11, 6, 23, 30, 0, 0, time.UTC).Unix()

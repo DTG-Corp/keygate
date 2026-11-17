@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/uptrace/bun"
 
+	"github.com/dtg-corp/dsoft/internal/branding"
 	"github.com/dtg-corp/dsoft/internal/license"
 	"github.com/dtg-corp/dsoft/internal/model"
 	"github.com/dtg-corp/dsoft/internal/service"
@@ -1944,7 +1945,7 @@ func (h *AdminHandler) stripePricesTaken(c *gin.Context, purchasePrice, renewalP
 }
 
 // stripePriceTaken rejects a Stripe price already mapped to another
-// plan. Checkout sessions created outside Keygate (Payment Links)
+// plan. Checkout sessions created outside DSoft (Payment Links)
 // resolve their plan by price alone, so the mapping must be unique.
 // Writes the 409 response itself and reports whether it did.
 func (h *AdminHandler) stripePriceTaken(c *gin.Context, priceID, exceptPlanID string) bool {
@@ -2648,7 +2649,7 @@ func (h *AdminHandler) CreateLicense(c *gin.Context) {
 		response.BadRequest(c, appErr.Message)
 		return
 	}
-	// External IDs are opaque to Keygate but we cap their length to
+	// External IDs are opaque to DSoft but we cap their length to
 	// keep them index-friendly. 256 chars is comfortably above what
 	// any real identifier scheme produces (UUIDs, Stripe IDs, etc).
 	if len(req.ExternalCustomerID) > 256 {
@@ -5161,8 +5162,8 @@ func (h *AdminHandler) SendTestEmail(c *gin.Context) {
 		return
 	}
 	if err := h.Email.Send(to,
-		"Keygate test email",
-		`<p>Hello! This is a test email from Keygate.</p>`+
+		"DSoft test email",
+		`<p>Hello! This is a test email from DSoft.</p>`+
 			`<p>If you can read this, your SMTP setup is working.</p>`); err != nil {
 		response.Err(c, http.StatusBadGateway, "EMAIL_SEND_FAILED", err.Error())
 		return
@@ -5297,11 +5298,11 @@ func (h *AdminHandler) InviteTeamMember(c *gin.Context) {
 	// does NOT roll back the role grant (OTP login still works
 	// out-of-band). The inviter (actor) name is shown so the
 	// recipient knows who added them, which helps spot social
-	// engineering ("why am I suddenly admin on Keygate?").
+	// engineering ("why am I suddenly admin on DSoft?").
 	if h.Email != nil {
 		siteName, _ := h.Store.GetSetting(c, "site_name")
 		if siteName == "" {
-			siteName = "Keygate"
+			siteName = branding.Product
 		}
 		inviter := actorUser.Name
 		if inviter == "" {
@@ -5406,7 +5407,7 @@ func (h *AdminHandler) ExportLicenses(c *gin.Context) {
 	}
 
 	// The export deliberately carries plaintext keys — that is its
-	// purpose, e.g. migrating off Keygate. But it is a bulk credential
+	// purpose, e.g. migrating off DSoft. But it is a bulk credential
 	// dump, so unlike a single reveal it must leave a trace of who
 	// pulled it and how much.
 	h.Store.Audit(c, &model.AuditLog{
@@ -5439,7 +5440,7 @@ func (h *AdminHandler) ExportLicenses(c *gin.Context) {
 			ValidUntil string `json:"valid_until"`
 			// UpdatesUntil is the end of a perpetual license's
 			// maintenance period; empty means no separate limit. The
-			// export exists to migrate off Keygate, so an entitlement
+			// export exists to migrate off DSoft, so an entitlement
 			// the license actually has must travel with it.
 			UpdatesUntil string `json:"updates_until"`
 			CreatedAt    string `json:"created_at"`

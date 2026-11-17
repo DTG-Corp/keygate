@@ -49,7 +49,7 @@ func newPaymentsFixture(t *testing.T) *paymentsFixture {
 	f := newAPIFixture(t)
 	fp := fake.New("sepay")
 	svc := &checkout.Service{
-		Store: f.s, BaseURL: "https://keygate.example.com",
+		Store: f.s, BaseURL: "https://dsoft.example.com",
 		Providers: (&paymentProviderFactory{prov: fp}).fn,
 	}
 	pf := &paymentsFixture{
@@ -113,7 +113,7 @@ func (f *paymentsFixture) seedOrder(t *testing.T, plan *model.Plan, email, provi
 		QRPayload:   "https://qr.example.com/" + order.Code,
 		CheckoutURL: "https://pay.example.com/" + order.Code,
 		Raw: json.RawMessage(`{"bank":{"bank_name":"MB","bank_bin":"970422","account_no":"0978482700",` +
-			`"account_name":"CONG TY TNHH KEYGATE"},"description":"` + order.Code + `"}`),
+			`"account_name":"CONG TY TNHH DSOFT"},"description":"` + order.Code + `"}`),
 		ExpiresAt: ptrTime(time.Now().Add(time.Hour)),
 	}
 	if err := f.s.CreatePaymentAttempt(f.ctx, attempt); err != nil {

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stripe/stripe-go/v82"
 	"github.com/dtg-corp/dsoft/internal/model"
+	"github.com/stripe/stripe-go/v82"
 )
 
 // A subscription event that arrives after the licence was unlinked

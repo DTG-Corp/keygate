@@ -19,7 +19,7 @@ import (
 
 // A delayed payment that fails at a subscription checkout leaves the
 // subscription Stripe made (it voids only the first invoice). With no
-// licence on it, it is cancelled when Keygate sold it (the session's
+// licence on it, it is cancelled when DSoft sold it (the session's
 // metadata, or a price a plan sells); one a licence does follow, or one
 // another product sold, is left.
 func TestAsyncPaymentFailureCancelsTheOrphanSubscription(t *testing.T) {
@@ -56,7 +56,7 @@ func TestAsyncPaymentFailureCancelsTheOrphanSubscription(t *testing.T) {
 		t.Fatalf("orphan subscription cancelled %d times, want once", n)
 	}
 	// The subscription expanded into the session reads the same, and a
-	// session without metadata is Keygate's by its price.
+	// session without metadata is DSoft's by its price.
 	fail("priced", fmt.Sprintf(`"subscription":{"id":%q,"object":"subscription","status":"active"}`, priced))
 	if n := cancels.Load(); n != 2 {
 		t.Fatalf("subscription of a plan's price: cancelled %d times in all, want 2", n)

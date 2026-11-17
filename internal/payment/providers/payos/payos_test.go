@@ -78,8 +78,8 @@ func TestCreatePaymentLinkSendsSignedRequest(t *testing.T) {
 		BuyerName: "Nguyen Van A", BuyerEmail: "buyer@example.com",
 		BuyerPhone: "+84900000000", BuyerAddress: "1 Le Loi", BuyerTaxID: "0312345678",
 		Items:     []payos.Item{{Name: "Pro", Quantity: 1, Price: 1200000, TaxPercentage: 5}},
-		CancelURL: "https://keygate.example.com/pay/KG7F3K2Q",
-		ReturnURL: "https://keygate.example.com/pay/KG7F3K2Q",
+		CancelURL: "https://dsoft.example.com/pay/KG7F3K2Q",
+		ReturnURL: "https://dsoft.example.com/pay/KG7F3K2Q",
 		ExpiredAt: 1793000000,
 	}
 	var called atomic.Bool
@@ -289,10 +289,10 @@ func TestConfirmWebhook(t *testing.T) {
 		body = readJSON(t, r)
 		_ = json.NewEncoder(w).Encode(map[string]any{"code": "00", "desc": "success", "data": "ok"})
 	})
-	if err := client.ConfirmWebhook(context.Background(), "https://keygate.example.com/api/v1/webhook/payos"); err != nil {
+	if err := client.ConfirmWebhook(context.Background(), "https://dsoft.example.com/api/v1/webhook/payos"); err != nil {
 		t.Fatalf("confirm webhook: %v", err)
 	}
-	if body["webhookUrl"] != "https://keygate.example.com/api/v1/webhook/payos" {
+	if body["webhookUrl"] != "https://dsoft.example.com/api/v1/webhook/payos" {
 		t.Fatalf("webhookUrl = %v", body["webhookUrl"])
 	}
 }
@@ -345,8 +345,8 @@ func TestProviderCreateAttempt(t *testing.T) {
 			Name: "Nguyen Van A", Email: "buyer@example.com",
 			Phone: "+84900000000", TaxID: "0312345678", Address: "1 Le Loi",
 		},
-		ReturnURL: "https://keygate.example.com/pay/KG7F3K2Q",
-		CancelURL: "https://keygate.example.com/pay/KG7F3K2Q",
+		ReturnURL: "https://dsoft.example.com/pay/KG7F3K2Q",
+		CancelURL: "https://dsoft.example.com/pay/KG7F3K2Q",
 		ExpiresAt: expiresAt,
 	})
 	if err != nil {
@@ -358,8 +358,8 @@ func TestProviderCreateAttempt(t *testing.T) {
 	}
 	wantSig := payos.SignCreateRequest(checksumKey, payos.CreateRequest{
 		OrderCode: 123, Amount: 1200000, Description: "KG7F3K2Q",
-		CancelURL: "https://keygate.example.com/pay/KG7F3K2Q",
-		ReturnURL: "https://keygate.example.com/pay/KG7F3K2Q",
+		CancelURL: "https://dsoft.example.com/pay/KG7F3K2Q",
+		ReturnURL: "https://dsoft.example.com/pay/KG7F3K2Q",
 	})
 	if body["signature"] != wantSig {
 		t.Fatalf("signature = %v, want %s", body["signature"], wantSig)
@@ -498,10 +498,10 @@ func TestProviderConfirmWebhook(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	if err := newProvider(t, srv.URL).ConfirmWebhook(context.Background(), "https://keygate.example.com/api/v1/webhook/payos"); err != nil {
+	if err := newProvider(t, srv.URL).ConfirmWebhook(context.Background(), "https://dsoft.example.com/api/v1/webhook/payos"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
-	if path != "/confirm-webhook" || body["webhookUrl"] != "https://keygate.example.com/api/v1/webhook/payos" {
+	if path != "/confirm-webhook" || body["webhookUrl"] != "https://dsoft.example.com/api/v1/webhook/payos" {
 		t.Fatalf("request = %s %v", path, body)
 	}
 

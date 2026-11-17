@@ -14,7 +14,7 @@ import (
 	"github.com/dtg-corp/dsoft/internal/store"
 )
 
-// webhookReceiver counts the POSTs it gets per X-Keygate-Delivery id.
+// webhookReceiver counts the POSTs it gets per X-DSoft-Delivery id.
 type webhookReceiver struct {
 	srv    *httptest.Server
 	mu     sync.Mutex
@@ -30,7 +30,7 @@ func newWebhookReceiver(t *testing.T, status int) *webhookReceiver {
 		// first one is still waiting on the receiver.
 		time.Sleep(50 * time.Millisecond)
 		r.mu.Lock()
-		r.hits[req.Header.Get("X-Keygate-Delivery")]++
+		r.hits[req.Header.Get("X-DSoft-Delivery")]++
 		r.mu.Unlock()
 		w.WriteHeader(r.status)
 	}))

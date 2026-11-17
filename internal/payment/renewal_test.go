@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/dtg-corp/dsoft/internal/model"
 	"github.com/dtg-corp/dsoft/internal/store"
 	"github.com/dtg-corp/dsoft/internal/testsupport"
+	"github.com/gin-gonic/gin"
 )
 
 // aboutDays reports whether a period ends roughly that many days out.
@@ -256,7 +256,7 @@ func TestRenewUpdates_Endpoint(t *testing.T) {
 	if err := s.SetSettings(ctx, map[string]string{store.SettingMaintenanceFeatures: "true"}); err != nil {
 		t.Fatal(err)
 	}
-	h := &StripeHandler{Store: s, BaseURL: "https://keygate.example"}
+	h := &StripeHandler{Store: s, BaseURL: "https://dsoft.example"}
 
 	call := func(email, licenseID string) (int, map[string]any) {
 		w := httptest.NewRecorder()
@@ -310,7 +310,7 @@ func TestRenewUpdates_Endpoint(t *testing.T) {
 		"mode": "payment", "line_items[0][price]": plan.StripeRenewalPriceID, "customer_email": lic.Email,
 		"metadata[kind]": kindRenewal, "metadata[license_id]": lic.ID, "metadata[renewal_days]": "365",
 		"payment_intent_data[metadata][kind]": kindRenewal, "payment_intent_data[metadata][license_id]": lic.ID,
-		"success_url": "https://keygate.example/checkout/success?session_id={CHECKOUT_SESSION_ID}",
+		"success_url": "https://dsoft.example/checkout/success?session_id={CHECKOUT_SESSION_ID}",
 	}
 	for k, want := range checks {
 		if got := form.Get(k); got != want {
@@ -796,7 +796,7 @@ func TestCheckoutByPlan_BoundedPlanNeedsTheSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	plain := seedPlan(t, s, ctx, "sellplain", "perpetual")
-	h := &StripeHandler{Store: s, BaseURL: "https://keygate.example"}
+	h := &StripeHandler{Store: s, BaseURL: "https://dsoft.example"}
 	get := func(checkoutID string) (int, string) {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
@@ -830,7 +830,7 @@ func TestCheckoutByPlan_BoundedPlanNeedsTheSwitch(t *testing.T) {
 // when the session was created. Editing the plan before the payment
 // settles must not change what the customer bought — in particular it
 // must not take a lifetime entitlement away from someone who paid for
-// one. Sessions created outside Keygate carry no terms and fall back
+// one. Sessions created outside DSoft carry no terms and fall back
 // to the plan.
 func TestFulfillCheckout_UpdatePeriodFrozenAtCheckout(t *testing.T) {
 	s, ctx := openStore(t)
@@ -976,7 +976,7 @@ func TestFulfillCheckout_UnmanagedSessionUsesTermsAtCheckout(t *testing.T) {
 		t.Fatalf("checkout opened after the changes: got %v want ~30 days", got)
 	}
 
-	// Keygate's own checkout still wins over both: it carries terms.
+	// DSoft's own checkout still wins over both: it carries terms.
 	managed := "plink-d-" + plan.Slug + "@example.com"
 	m := link("cs_plink_d_"+plan.Slug, opened)
 	m[metaUpdatesDays] = "10"

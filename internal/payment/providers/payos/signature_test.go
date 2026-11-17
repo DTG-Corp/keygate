@@ -15,11 +15,11 @@ func TestSignCreateRequestPinned(t *testing.T) {
 	// amount=…&cancelUrl=…&description=…&orderCode=…&returnUrl=… .
 	req := payos.CreateRequest{
 		OrderCode: 123, Amount: 1200000, Description: "KG7F3K2Q",
-		CancelURL: "https://keygate.example.com/pay/KG7F3K2Q",
-		ReturnURL: "https://keygate.example.com/pay/KG7F3K2Q",
+		CancelURL: "https://dsoft.example.com/pay/KG7F3K2Q",
+		ReturnURL: "https://dsoft.example.com/pay/KG7F3K2Q",
 	}
 	got := payos.SignCreateRequest("checksum-key", req)
-	want := "459f1d7f8ea39ccdd1927f95a478bdf304c7014bbbff1dac653388e2ff8c7c30"
+	want := "286a6cb8f152047c19babb4a76a98d447b9c92c70b8fdff3a42fb4da50d78204"
 	if got != want {
 		t.Fatalf("signature = %s, want %s", got, want)
 	}
@@ -32,8 +32,8 @@ func TestSignCreateRequestPinned(t *testing.T) {
 func TestSignCreateRequestIgnoresUnsignedFields(t *testing.T) {
 	base := payos.CreateRequest{
 		OrderCode: 123, Amount: 1200000, Description: "KG7F3K2Q",
-		CancelURL: "https://keygate.example.com/pay/KG7F3K2Q",
-		ReturnURL: "https://keygate.example.com/pay/KG7F3K2Q",
+		CancelURL: "https://dsoft.example.com/pay/KG7F3K2Q",
+		ReturnURL: "https://dsoft.example.com/pay/KG7F3K2Q",
 	}
 	withExtras := base
 	withExtras.BuyerName = "Nguyen Van A"

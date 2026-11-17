@@ -30,7 +30,7 @@ func scratchStore(t *testing.T) *store.Store {
 		t.Skipf("skipping integration test: %v", err)
 	}
 	t.Cleanup(func() { admin.Close() })
-	name := fmt.Sprintf("keygate_scratch_test_%d", time.Now().UnixNano())
+	name := fmt.Sprintf("dsoft_scratch_test_%d", time.Now().UnixNano())
 	if _, err := admin.DB.ExecContext(context.Background(), "CREATE DATABASE "+name); err != nil {
 		t.Skipf("cannot create a scratch database: %v", err)
 	}

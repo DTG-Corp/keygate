@@ -51,7 +51,7 @@ func newUpgradeFixture(t *testing.T, tag string) *upgradeFixture {
 		t.Fatalf("create licence: %v", err)
 	}
 	gin.SetMode(gin.TestMode)
-	return &upgradeFixture{s: s, ctx: ctx, h: &StripeHandler{Store: s, BaseURL: "https://keygate.example"},
+	return &upgradeFixture{s: s, ctx: ctx, h: &StripeHandler{Store: s, BaseURL: "https://dsoft.example"},
 		free: free, paid: paid, lic: lic, tag: suffix}
 }
 

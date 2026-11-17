@@ -168,7 +168,7 @@ func newFallbackFixture(t *testing.T) *fallbackFixture {
 	f.mail = newMailCatcher(t)
 	host, port, _ := net.SplitHostPort(f.mail.addr)
 	wh := NewWebhookService(s, slog.Default(), time.Second, 0, true)
-	f.c = NewExpiryChecker(s, NewEmailService(host, port, "", "", "keygate@test.local", slog.Default(), s), wh, slog.Default())
+	f.c = NewExpiryChecker(s, NewEmailService(host, port, "", "", "dsoft@test.local", slog.Default(), s), wh, slog.Default())
 	return f
 }
 

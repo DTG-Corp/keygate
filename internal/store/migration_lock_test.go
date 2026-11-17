@@ -27,7 +27,7 @@ func scratchMigrationStore(t *testing.T, params url.Values) *Store {
 	}
 	t.Cleanup(func() { _ = admin.Close() })
 	ctx := context.Background()
-	name := fmt.Sprintf("keygate_miglock_test_%d", time.Now().UnixNano())
+	name := fmt.Sprintf("dsoft_miglock_test_%d", time.Now().UnixNano())
 	if _, err := admin.DB.ExecContext(ctx, "CREATE DATABASE "+name); err != nil {
 		t.Skipf("cannot create a scratch database: %v", err)
 	}
