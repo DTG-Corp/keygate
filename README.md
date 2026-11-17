@@ -10,8 +10,6 @@ The self-hosted alternative to Keygen, Cryptlex, and LicenseSpring.
 
 [Website](https://github.com/dtg-corp/dsoft) · [Documentation](https://github.com/dtg-corp/dsoft/tree/main/docs) · [Community](https://github.com/dtg-corp/dsoft/discussions)
 
-[![License](https://img.shields.io/badge/license-AGPL%20v3-blue.svg)](LICENSE)
-
 **[English](README.md)** · **[简体中文](README.zh-CN.md)**
 
 </div>
@@ -148,20 +146,6 @@ Open **http://localhost:9000** — the setup wizard guides you from there.
 ## Contributing
 
 All contributions welcome — bugs, features, docs, translations. Check [open issues](https://github.com/dtg-corp/dsoft/issues) or start a [discussion](https://github.com/dtg-corp/dsoft/discussions), then submit a PR.
-
-## Commercial License
-
-Using Keygate is free, commercially included. Run it for your own business, license the software you sell with it, or serve your own customers from it, and you owe nothing.
-
-The AGPL asks two things in return: the **"Powered by Keygate"** line stays visible in the interface, and if you modify Keygate and let others use it, your changes are published. A commercial license lifts both, which is what white labelling or reselling it as a closed service needs.
-
-Contact [hello@keygate.app](mailto:hello@keygate.app).
-
-## License
-
-[AGPL v3 License](LICENSE) with additional terms per [Section 7(b)](https://www.gnu.org/licenses/agpl-3.0.en.html#section7) — Copyright © 2026 [Tabloy](https://tabloy.app)
-
-You are free to fork, modify, and self-host this software under the AGPL v3. The **"Powered by Keygate"** attribution in the UI must be preserved (see [NOTICE](NOTICE)).
 
 ---
 

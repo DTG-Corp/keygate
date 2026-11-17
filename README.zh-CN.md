@@ -10,8 +10,6 @@
 
 [官网](https://github.com/dtg-corp/dsoft) · [文档](https://github.com/dtg-corp/dsoft/tree/main/docs) · [社区](https://github.com/dtg-corp/dsoft/discussions)
 
-[![License](https://img.shields.io/badge/license-AGPL%20v3-blue.svg)](LICENSE)
-
 **[English](README.md)** · **[简体中文](README.zh-CN.md)**
 
 </div>
@@ -144,20 +142,6 @@ make build && ./bin/dsoft
 ## 贡献
 
 欢迎所有形式的贡献 — Bug 修复、新功能、文档改进、翻译等。查看 [open issues](https://github.com/dtg-corp/dsoft/issues) 或发起 [讨论](https://github.com/dtg-corp/dsoft/discussions)，然后提交 PR。
-
-## 商业授权
-
-使用 Keygate 是免费的，商用也免费。自己部署运行、用它给你销售的软件发授权、面向自己的客户提供服务，都不用付费。
-
-AGPL 只要求两件事：界面上保留 **"Powered by Keygate"** 署名；如果你修改了 Keygate 并让别人使用，把改动公开。商业授权解除这两条，白标或以闭源服务转售需要它。
-
-请联系 [hello@keygate.app](mailto:hello@keygate.app)。
-
-## 许可证
-
-[AGPL v3 License](LICENSE)（附 [Section 7(b)](https://www.gnu.org/licenses/agpl-3.0.en.html#section7) 附加条款）— Copyright © 2026 [Tabloy](https://tabloy.app)
-
-你可以在 AGPL v3 下自由 fork、修改和自托管本软件。UI 中的 **"Powered by Keygate"** 署名须保留（详见 [NOTICE](NOTICE)）。
 
 ---
 
