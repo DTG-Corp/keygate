@@ -278,10 +278,6 @@ export const checkoutPay = {
   // Public: the order code is the capability, exactly like the Stripe
   // success page's session id. No cookie is sent.
   status: (code: string) => publicGet<PayStatus>(`/pay/${encodeURIComponent(code)}/status`),
-  // Dry-run price for a plan plus coupon codes, before an order exists.
-  // This is the public surface a coupon-aware entry page can use; it
-  // never creates or changes an order.
-  quote: async (input: PaymentQuoteInput) => normaliseCouponQuote(await post<unknown>("/payments/quote", input)),
 }
 
 // ─── Invites (public, token-only) ───
@@ -1041,8 +1037,16 @@ function rawBool(value: unknown, fallback: boolean): boolean {
 }
 
 // pagedRows reads a list envelope whose array name may differ between
-// handlers (`coupons`, `items`, `rows`). The three pagination numbers are
-// passed through so useServerPagination sees the limit the server applied.
+// handlers (`data`, `coupons`, `invoices`, `items`, `rows`). Coupon and
+// redemption lists call the envelope key `data` while the other payment
+// lists name their rows, so callers pass the names they expect. The three
+// pagination numbers are passed through so useServerPagination sees the
+// limit the server applied.
+//
+// Tolerant on purpose: an unknown key is not an error, because a list
+// response may still be a bare array. A response whose shape matches
+// none of the names yields an empty list, which surfaces as an empty
+// state rather than a crash.
 function pagedRows<T>(raw: unknown, keys: string[], normalise: (row: unknown) => T) {
   const rec = rawRecord(raw)
   let rows: unknown[] = []
@@ -1064,6 +1068,9 @@ function pagedRows<T>(raw: unknown, keys: string[], normalise: (row: unknown) =>
 export interface CouponScope {
   scope_type: "product" | "plan" | string
   scope_id: string
+  // The admin handler resolves target names for display. Absent on a
+  // scope the editor is about to save; the UI falls back to the id then.
+  name?: string
 }
 
 export interface CouponStats {
@@ -1158,7 +1165,11 @@ function normaliseScopes(value: unknown): CouponScope[] {
   return value
     .map((scope) => {
       const rec = rawRecord(scope)
-      return { scope_type: rawString(rec.scope_type), scope_id: rawString(rec.scope_id) }
+      return {
+        scope_type: rawString(rec.scope_type),
+        scope_id: rawString(rec.scope_id),
+        name: rawString(rec.name) || undefined,
+      }
     })
     .filter((scope) => scope.scope_type !== "" && scope.scope_id !== "")
 }
@@ -1174,7 +1185,9 @@ function normaliseCouponStats(value: unknown): CouponStats | undefined {
 
 function normaliseCoupon(value: unknown): Coupon {
   const rec = rawRecord(value)
-  const stats = normaliseCouponStats(rec.stats ?? rec.usage)
+  // The detail handler calls its aggregate `redemptions`; older shapes
+  // used `stats`/`usage`. Prefer whichever the payload carries.
+  const stats = normaliseCouponStats(rec.stats ?? rec.usage ?? rec.redemptions)
   return {
     id: rawString(rec.id),
     code: rawString(rec.code),
@@ -1206,7 +1219,8 @@ function normaliseCouponDetail(value: unknown): Coupon {
   const coupon = normaliseCoupon(base)
   const scopes = rec.scopes ?? base.scopes
   if (Array.isArray(scopes)) coupon.scopes = normaliseScopes(scopes)
-  coupon.stats = normaliseCouponStats(rec.stats ?? base.stats ?? rec.usage) ?? coupon.stats
+  coupon.stats =
+    normaliseCouponStats(rec.stats ?? base.stats ?? rec.usage ?? rec.redemptions ?? base.redemptions) ?? coupon.stats
   return coupon
 }
 
@@ -1214,10 +1228,11 @@ function quoteMoney(rec: RawRecord, name: string): number | undefined {
   return rawNumber(rec[`${name}_minor`]) ?? rawNumber(rec[name]) ?? rawNumber(rec[`${name}_amount`])
 }
 
-function normaliseCouponQuote(value: unknown): CouponQuote {
-  const rec = rawRecord(rawRecord(value).quote ?? value)
-  const discountRows = rec.discounts ?? rec.applied ?? rec.coupon_discounts
-  const discounts: CouponDiscount[] = (Array.isArray(discountRows) ? discountRows : [])
+// A discount row is frozen on the order as an amount plus the code that
+// produced it. `amount` is accepted as an alias because the checkout
+// model has carried both names across the phase-1b merge.
+export function normaliseCouponDiscounts(value: unknown): CouponDiscount[] {
+  return (Array.isArray(value) ? value : [])
     .map((entry) => {
       const row = rawRecord(entry)
       return {
@@ -1231,6 +1246,12 @@ function normaliseCouponQuote(value: unknown): CouponQuote {
       }
     })
     .filter((discount) => discount.code !== "")
+}
+
+function normaliseCouponQuote(value: unknown): CouponQuote {
+  const rec = rawRecord(rawRecord(value).quote ?? value)
+  const discountRows = rec.discounts ?? rec.applied ?? rec.coupon_discounts
+  const discounts = normaliseCouponDiscounts(discountRows)
   return {
     subtotal_minor: quoteMoney(rec, "subtotal"),
     discount_minor: quoteMoney(rec, "discount"),
@@ -1243,56 +1264,104 @@ function normaliseCouponQuote(value: unknown): CouponQuote {
   }
 }
 
+// The admin preview prices stored codes only. Its body is exactly the
+// fields the handler reads: plan, provider, quantity, codes, invalid-code
+// policy, buyer identity. There is no subtotal override or inline coupon
+// definition — the quote always prices the plan's configured price.
 export interface CouponPreviewInput {
-  coupon_id?: string
-  code?: string
-  codes?: string[]
   plan_id: string
+  provider?: string
   quantity?: number
-  subtotal_minor?: number
-  currency?: string
+  codes?: string[]
+  ignore_invalid?: boolean
   email?: string
-  // Unsaved editor state. A handler that prices a definition before it
-  // is stored can read it; one that only accepts coupon_id ignores it.
-  definition?: Partial<CouponInput>
+  external_customer_id?: string
+}
+
+export interface CouponPreviewTarget {
+  id: string
+  name: string
+  slug?: string
+  license_type?: string
+}
+
+export interface CouponPreviewPrice {
+  provider: string
+  currency: string
+  amount_minor: number
+  billing_interval: string
+}
+
+export interface CouponPreview {
+  plan: CouponPreviewTarget
+  product: CouponPreviewTarget
+  price: CouponPreviewPrice
+  quote: CouponQuote
 }
 
 export class CouponPreviewUnavailableError extends Error {}
 
-// The admin preview route is not pinned by the phase-1b contract, so the
-// client tries the spellings a handler is likely to mount and remembers
-// the one that answered. A 404/405 means "wrong path", not "bad coupon";
-// a 4xx with a payment code is surfaced so the editor can show it.
-const COUPON_PREVIEW_PATHS = ["/admin/coupons/preview", "/admin/coupons/quote", "/admin/payments/coupons/preview"]
-let couponPreviewPath: string | null | undefined
-
+// A 404/405 on the preview path means the deployment does not mount the
+// route, not that the coupon is invalid. Anything else (409, 422, ...)
+// carries a payment error code and is surfaced to the editor.
 function isMissingRoute(err: unknown): boolean {
   const code = errorCode(err)
   const message = err instanceof Error ? err.message : ""
   return (!code || code === "NOT_FOUND") && /(404|405|not found|method not allowed)/i.test(message)
 }
 
+function normaliseCouponPreview(value: unknown): CouponPreview {
+  const rec = rawRecord(value)
+  const plan = rawRecord(rec.plan)
+  const product = rawRecord(rec.product)
+  const price = rawRecord(rec.price)
+  const quote = normaliseCouponQuote(rec.quote ?? value)
+  const currency = rawString(price.currency)
+  if (!quote.currency) quote.currency = currency || undefined
+  return {
+    plan: {
+      id: rawString(plan.id),
+      name: rawString(plan.name),
+      slug: rawString(plan.slug) || undefined,
+      license_type: rawString(plan.license_type) || undefined,
+    },
+    product: {
+      id: rawString(product.id),
+      name: rawString(product.name),
+      slug: rawString(product.slug) || undefined,
+    },
+    price: {
+      provider: rawString(price.provider),
+      currency,
+      amount_minor: rawNumber(price.amount_minor) ?? 0,
+      billing_interval: rawString(price.billing_interval),
+    },
+    quote,
+  }
+}
+
 export const adminCoupons = {
   list: async (params?: {
     q?: string
     active?: boolean
-    type?: string
     stack_group?: string
     scope_type?: string
+    scope_id?: string
     limit?: number
     offset?: number
   }): Promise<Paged<{ coupons: Coupon[] }>> => {
     const query = listQuery({
       q: params?.q,
       active: params?.active === undefined ? undefined : String(params.active),
-      type: params?.type,
       stack_group: params?.stack_group,
       scope_type: params?.scope_type,
+      scope_id: params?.scope_id,
       limit: params?.limit,
       offset: params?.offset,
     })
     const raw = await get<unknown>(`/admin/coupons?${query}`)
-    const page = pagedRows(raw, ["coupons", "items", "rows"], normaliseCoupon)
+    // The coupon handler calls the array `data` inside the envelope.
+    const page = pagedRows(raw, ["data", "coupons", "items", "rows"], normaliseCoupon)
     return {
       coupons: page.rows,
       total: page.total,
@@ -1318,40 +1387,24 @@ export const adminCoupons = {
     params?: { limit?: number; offset?: number },
   ): Promise<Paged<{ redemptions: CouponRedemptionRow[] }>> => {
     const raw = await get<unknown>(`/admin/coupons/${encodeURIComponent(id)}/redemptions?${listQuery(params)}`)
-    const page = pagedRows(raw, ["redemptions", "items", "rows"], normaliseRedemption)
+    const page = pagedRows(raw, ["data", "redemptions", "items", "rows"], normaliseRedemption)
     return { redemptions: page.rows, total: page.total, limit: page.limit, offset: page.offset }
   },
-  // Live quote preview for the editor. Throws CouponPreviewUnavailableError
-  // when no preview route is mounted, which the editor renders as a
-  // clearly marked local estimate instead of an error.
-  preview: async (input: CouponPreviewInput): Promise<CouponQuote> => {
-    if (couponPreviewPath === null) {
-      throw new CouponPreviewUnavailableError("coupon preview is not available on this server")
-    }
-    const candidates = couponPreviewPath ? [couponPreviewPath] : COUPON_PREVIEW_PATHS
-    const body = {
-      coupon_id: input.coupon_id,
-      code: input.code,
-      codes: input.codes,
-      plan_id: input.plan_id,
-      quantity: input.quantity ?? 1,
-      subtotal_minor: input.subtotal_minor,
-      currency: input.currency,
-      email: input.email,
-      coupon: input.definition,
-    }
-    for (const path of candidates) {
-      try {
-        const raw = await post<unknown>(path, body)
-        couponPreviewPath = path
-        return normaliseCouponQuote(raw)
-      } catch (err) {
-        if (isMissingRoute(err)) continue
-        throw err
+  // Live quote preview for the editor. It prices the saved coupon
+  // definition, so the editor only calls it for a coupon that exists.
+  // Throws CouponPreviewUnavailableError when the deployment does not
+  // mount the route, which the editor reports instead of inventing a
+  // subtotal or a tax rate.
+  preview: async (input: CouponPreviewInput): Promise<CouponPreview> => {
+    const body: CouponPreviewInput = { ...input, quantity: input.quantity ?? 1 }
+    try {
+      return normaliseCouponPreview(await post<unknown>("/admin/coupons/preview", body))
+    } catch (err) {
+      if (isMissingRoute(err)) {
+        throw new CouponPreviewUnavailableError("coupon preview is not available on this server")
       }
+      throw err
     }
-    couponPreviewPath = null
-    throw new CouponPreviewUnavailableError("coupon preview is not available on this server")
   },
 }
 
@@ -1395,7 +1448,7 @@ export const adminRedemptions = {
         offset: params?.offset,
       })}`,
     )
-    const page = pagedRows(raw, ["redemptions", "items", "rows"], normaliseRedemption)
+    const page = pagedRows(raw, ["data", "redemptions", "items", "rows"], normaliseRedemption)
     return { redemptions: page.rows, total: page.total, limit: page.limit, offset: page.offset }
   },
   csv: (params?: RedemptionFilter) =>
@@ -1736,7 +1789,13 @@ export interface PortalPaymentOrder {
   paid_at?: string
   created_at?: string
   license_id?: string
+  // Not returned by the shipped portal order view; the detail page links
+  // to the invoice list instead. Kept for deployments that add the field.
   invoice_id?: string
+  // The order view only carries a breakdown when the handler attached
+  // the frozen discount rows. The shipped handler does not, so this is
+  // usually undefined and the page shows the order total alone.
+  discounts?: CouponDiscount[]
   payment?: PaymentInstructions
 }
 
@@ -1794,6 +1853,10 @@ function normalisePortalOrder(value: unknown): PortalPaymentOrder {
     created_at: rawString(rec.created_at) || undefined,
     license_id: rawString(rec.license_id) || undefined,
     invoice_id: rawString(rec.invoice_id) || undefined,
+    discounts: (() => {
+      const rows = normaliseCouponDiscounts(rec.discounts ?? rec.coupon_discounts)
+      return rows.length > 0 ? rows : undefined
+    })(),
     payment: undefined,
   }
 }
@@ -1825,11 +1888,11 @@ function normalisePortalOrderDetail(value: unknown): {
 }
 
 export const portalPayments = {
-  orders: async (params?: {
-    status?: string
-    limit?: number
-    offset?: number
-  }): Promise<Paged<{ orders: PortalPaymentOrder[] }>> => {
+  // The shipped portal list reads only limit/offset; it has no status
+  // filter. The list page filters the rows it has loaded client-side and
+  // labels that as a loaded-page filter rather than implying server
+  // filtering.
+  orders: async (params?: { limit?: number; offset?: number }): Promise<Paged<{ orders: PortalPaymentOrder[] }>> => {
     const raw = await get<unknown>(`/portal/payments/orders?${listQuery(params)}`)
     const page = pagedRows(raw, ["orders", "items", "rows"], normalisePortalOrder)
     return { orders: page.rows, total: page.total, limit: page.limit, offset: page.offset }
@@ -1888,19 +1951,13 @@ export const portalBilling = {
     normaliseBillingProfile(await put<unknown>("/portal/billing-profile", buyer)),
 }
 
-// ─── Phase 1b: public coupon quote ───
-// Dry-run pricing for `{plan_id, quantity, email, coupon_codes[]}`. The
-// pay page never re-prices an order, but the quote is what a coupon-aware
-// entry surface needs before an order exists (spec §6.1).
-export interface PaymentQuoteInput {
-  plan_id: string
-  quantity?: number
-  email?: string
-  coupon_codes?: string[]
-  ignore_invalid_coupons?: boolean
-}
-
 // ─── File downloads (invoice PDF, report/redemption CSV) ───
+//
+// There is deliberately no client for the public `POST /payments/quote`
+// route: the shipped server does not register a handler for it. The pay
+// page only reads an existing order's status and never re-prices one, so
+// there is nothing here to call. If the route is mounted later, add the
+// client alongside its handler rather than guessing its shape.
 
 export interface DownloadedFile {
   blob: Blob

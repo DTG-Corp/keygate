@@ -22,7 +22,7 @@ import {
 } from "@/lib/api"
 import { currencyExponent, formatAmountInput, formatMoney, parseAmountToMinor } from "@/lib/money"
 import { useDebounced } from "@/lib/use-debounced"
-import { formatDate } from "@/lib/utils"
+import { formatDateVN } from "@/lib/utils"
 
 type CouponType = "percent" | "fixed" | "trial"
 type StackGroup = "general" | "campaign" | "private"
@@ -84,7 +84,6 @@ export default function PaymentCouponEditorPage() {
   const [formError, setFormError] = useState("")
   const [extraCodes, setExtraCodes] = useState<string[]>([])
   const [previewPlan, setPreviewPlan] = useState("")
-  const [previewSubtotal, setPreviewSubtotal] = useState("")
   const [previewEmail, setPreviewEmail] = useState("")
 
   // Load the saved definition once per coupon id. A refetch after a save
@@ -166,6 +165,7 @@ export default function PaymentCouponEditorPage() {
     mutationFn: (input: CouponInput) => (editing && id ? adminCoupons.update(id, input) : adminCoupons.create(input)),
     onSuccess: (saved: Coupon) => {
       qc.invalidateQueries({ queryKey: ["admin", "coupons"] })
+      qc.invalidateQueries({ queryKey: ["admin", "coupons", "preview"] })
       showToast(t("coupons.saved"), "success")
       if (!editing) navigate(`/admin/payments/coupons/${saved.id}`, { replace: true })
       else qc.setQueryData(["admin", "coupons", "detail", id], saved)
@@ -182,49 +182,21 @@ export default function PaymentCouponEditorPage() {
     save.mutate(draft)
   }
 
-  // Live quote: debounce what is typed, ask the server when a sample plan
-  // is chosen, and fall back to a clearly marked local estimate when the
-  // preview route is not mounted.
-  const previewSignature = useDebounced(
-    JSON.stringify({
-      code: draft.code,
-      type: draft.type,
-      value: draft.value,
-      trial_days: draft.trial_days,
-      currency: draft.currency,
-      scopes: draft.scopes,
-      codes: extraCodes,
-    }),
-    500,
-  )
-  const previewEnabled = !!previewPlan && draft.code.length > 0 && !validationError
+  // Live quote. The preview prices stored coupons only, so it is offered
+  // for a saved coupon and never for the unsaved draft. The plan's own
+  // price is the subtotal: the handler ignores a caller-supplied one, and
+  // sending one would only pretend the input changed the quote.
+  const previewSignature = useDebounced(JSON.stringify({ code: draft.code, codes: extraCodes }), 500)
+  const previewEnabled = editing && !!id && !!previewPlan && draft.code.length > 0 && !validationError
   const preview = useQuery({
-    queryKey: [
-      "admin",
-      "coupons",
-      "preview",
-      id ?? "new",
-      previewPlan,
-      previewSignature,
-      previewSubtotal,
-      previewEmail,
-    ],
+    queryKey: ["admin", "coupons", "preview", id ?? "new", previewPlan, previewSignature, previewEmail],
     queryFn: () => {
-      const parsed = JSON.parse(previewSignature) as {
-        code: string
-        codes: string[]
-        currency: string
-      }
+      const parsed = JSON.parse(previewSignature) as { code: string; codes: string[] }
       const input: CouponPreviewInput = {
-        coupon_id: id,
-        code: parsed.code,
-        codes: parsed.codes,
         plan_id: previewPlan,
         quantity: 1,
-        subtotal_minor: previewSubtotal ? (parseAmountToMinor(previewSubtotal, exponent) ?? undefined) : undefined,
-        currency: form.currency || "VND",
+        codes: [parsed.code, ...parsed.codes].filter(Boolean),
         email: previewEmail || undefined,
-        definition: { ...draft, code: parsed.code },
       }
       return adminCoupons.preview(input)
     },
@@ -233,40 +205,10 @@ export default function PaymentCouponEditorPage() {
     staleTime: 15_000,
   })
 
-  const previewUnavailable =
-    !previewPlan ||
-    preview.error instanceof CouponPreviewUnavailableError ||
-    (!preview.isLoading && preview.isError && !preview.data)
-  const quote = preview.data
-
-  // A local estimate is arithmetic on the operator's own inputs; it is
-  // never presented as the server's quote.
-  const localQuote = useMemo(() => {
-    const subtotal = previewSubtotal ? (parseAmountToMinor(previewSubtotal, exponent) ?? 0) : 0
-    if (!subtotal) return null
-    if (draft.type === "trial") {
-      return {
-        subtotal_minor: subtotal,
-        discount_minor: subtotal,
-        total_minor: 0,
-        currency: form.currency || "VND",
-        currency_exponent: exponent,
-        discounts: [{ code: draft.code, type: "trial", amount_minor: subtotal }],
-      }
-    }
-    const discount =
-      draft.type === "percent"
-        ? Math.min(subtotal, Math.round((subtotal * draft.value) / 10000))
-        : Math.min(subtotal, draft.value)
-    return {
-      subtotal_minor: subtotal,
-      discount_minor: discount,
-      total_minor: subtotal - discount,
-      currency: form.currency || "VND",
-      currency_exponent: exponent,
-      discounts: [{ code: draft.code, type: draft.type, amount_minor: discount }],
-    }
-  }, [previewSubtotal, exponent, draft, form.currency])
+  const previewMissing = preview.error instanceof CouponPreviewUnavailableError
+  const quote = preview.data?.quote
+  const quoteCurrency = preview.data?.price.currency || quote?.currency || form.currency || "VND"
+  const quoteExponent = currencyExponent(quoteCurrency)
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((current) => ({ ...current, [key]: value }))
@@ -598,9 +540,9 @@ export default function PaymentCouponEditorPage() {
               </div>
               {form.valid_from && (
                 <p className="text-xs text-muted-foreground sm:col-span-2">
-                  {formatDate(fromLocalInput(form.valid_from) ?? undefined)} →{" "}
+                  {formatDateVN(fromLocalInput(form.valid_from) ?? undefined)} →{" "}
                   {form.valid_to
-                    ? formatDate(fromLocalInput(form.valid_to) ?? undefined)
+                    ? formatDateVN(fromLocalInput(form.valid_to) ?? undefined)
                     : t("coupons.validity_always")}
                 </p>
               )}
@@ -688,69 +630,61 @@ export default function PaymentCouponEditorPage() {
               <p className="text-sm text-muted-foreground">{t("coupons.preview_hint")}</p>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="space-y-1.5">
-                <Label>{t("coupons.preview_plan")}</Label>
-                <Select value={previewPlan} onValueChange={setPreviewPlan}>
-                  <SelectTrigger>
-                    <SelectValue placeholder={t("coupons.preview_plan")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(plans?.plans ?? []).slice(0, 50).map((plan) => (
-                      <SelectItem key={plan.id} value={plan.id}>
-                        {plan.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="preview-subtotal">{t("coupons.preview_subtotal")}</Label>
-                <Input
-                  id="preview-subtotal"
-                  inputMode="decimal"
-                  value={previewSubtotal}
-                  placeholder={formatAmountInput(0, exponent)}
-                  onChange={(e) => setPreviewSubtotal(e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="preview-email">{t("coupons.preview_email")}</Label>
-                <Input id="preview-email" value={previewEmail} onChange={(e) => setPreviewEmail(e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>{t("coupons.preview_codes")}</Label>
-                <CouponCodesInput codes={extraCodes} onChange={setExtraCodes} />
-              </div>
-
-              {!previewPlan && <p className="text-xs text-muted-foreground">{t("coupons.preview_hint")}</p>}
-              {previewPlan && preview.isLoading && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}
-                </div>
-              )}
-              {previewPlan && quote && !preview.error && (
-                <QuoteTotals quote={quote} currency={form.currency} exponent={exponent} />
-              )}
-              {previewPlan && preview.error && !(preview.error instanceof CouponPreviewUnavailableError) && (
-                <p className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
-                  {t("coupons.preview_invalid", { message: (preview.error as Error).message })}
+              {!editing ? (
+                <p className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
+                  {t("coupons.preview_unsaved")}
                 </p>
-              )}
+              ) : (
+                <>
+                  <div className="space-y-1.5">
+                    <Label>{t("coupons.preview_plan")}</Label>
+                    <Select value={previewPlan} onValueChange={setPreviewPlan}>
+                      <SelectTrigger>
+                        <SelectValue placeholder={t("coupons.preview_plan")} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(plans?.plans ?? []).slice(0, 50).map((plan) => (
+                          <SelectItem key={plan.id} value={plan.id}>
+                            {plan.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="preview-email">{t("coupons.preview_email")}</Label>
+                    <Input id="preview-email" value={previewEmail} onChange={(e) => setPreviewEmail(e.target.value)} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>{t("coupons.preview_codes")}</Label>
+                    <CouponCodesInput codes={extraCodes} onChange={setExtraCodes} />
+                  </div>
 
-              {previewUnavailable && previewPlan && (
-                <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3">
-                  <p className="text-xs font-medium text-amber-800">{t("coupons.preview_local")}</p>
-                  {localQuote ? (
-                    <QuoteTotals quote={localQuote} currency={form.currency} exponent={exponent} />
-                  ) : (
-                    <p className="text-xs text-amber-800">{t("coupons.preview_unavailable")}</p>
+                  {!previewPlan && <p className="text-xs text-muted-foreground">{t("coupons.preview_hint")}</p>}
+                  {previewPlan && preview.isLoading && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" /> {t("common.loading")}
+                    </div>
                   )}
-                </div>
-              )}
-              {draft.type === "trial" && (
-                <p className="text-xs text-muted-foreground">
-                  {t("coupons.trial_days")}: {draft.trial_days}
-                </p>
+                  {previewPlan && quote && !preview.error && (
+                    <QuoteTotals quote={quote} currency={quoteCurrency} exponent={quoteExponent} />
+                  )}
+                  {previewPlan && preview.error && !previewMissing && (
+                    <p className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                      {t("coupons.preview_invalid", { message: (preview.error as Error).message })}
+                    </p>
+                  )}
+                  {previewMissing && (
+                    <p className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                      {t("coupons.preview_unavailable")}
+                    </p>
+                  )}
+                  {draft.type === "trial" && (
+                    <p className="text-xs text-muted-foreground">
+                      {t("coupons.trial_days")}: {draft.trial_days}
+                    </p>
+                  )}
+                </>
               )}
             </CardContent>
           </Card>

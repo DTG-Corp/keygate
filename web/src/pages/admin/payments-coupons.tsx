@@ -29,12 +29,13 @@ import {
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useI18n } from "@/i18n"
-import { admin, adminCoupons, type Coupon } from "@/lib/api"
+import { adminCoupons, type Coupon } from "@/lib/api"
 import { currencyExponent, formatMoney } from "@/lib/money"
 import { useDebounced } from "@/lib/use-debounced"
-import { boolColor, formatDate } from "@/lib/utils"
+import { boolColor, formatDateVN } from "@/lib/utils"
 
 const STACK_GROUPS = ["general", "campaign", "private"] as const
+const SCOPE_TYPES = ["product", "plan"] as const
 
 export default function PaymentCouponsPage() {
   const { t } = useI18n()
@@ -42,32 +43,22 @@ export default function PaymentCouponsPage() {
   const [q, setQ] = useState("")
   const [active, setActive] = useState("all")
   const [stackGroup, setStackGroup] = useState("all")
+  const [scopeType, setScopeType] = useState("all")
   const qQuery = useDebounced(q, 300)
-  const pg = useServerPagination(20, [qQuery, active, stackGroup])
+  const pg = useServerPagination(20, [qQuery, active, stackGroup, scopeType])
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["admin", "coupons", qQuery, active, stackGroup, pg.page, pg.pageSize],
+    queryKey: ["admin", "coupons", qQuery, active, stackGroup, scopeType, pg.page, pg.pageSize],
     queryFn: () =>
       adminCoupons.list({
         q: qQuery,
         active: active === "all" ? undefined : active === "true",
         stack_group: stackGroup === "all" ? undefined : stackGroup,
+        scope_type: scopeType === "all" ? undefined : scopeType,
         ...pg.params,
       }),
   })
   const { items, total, totalPages } = pg.from(data, data?.coupons)
-
-  // Scope targets are shown by name when the list payload carries them.
-  const { data: products } = useQuery({
-    queryKey: ["admin", "products", "coupon-scope-labels"],
-    queryFn: () => admin.listProducts({ limit: 200 }),
-  })
-  const { data: plans } = useQuery({
-    queryKey: ["admin", "plans", "coupon-scope-labels"],
-    queryFn: () => admin.listPlans({ limit: 200 }),
-  })
-  const productNames = new Map((products?.products ?? []).map((p) => [p.id, p.name]))
-  const planNames = new Map((plans?.plans ?? []).map((p) => [p.id, p.name]))
 
   const [deleting, setDeleting] = useState<Coupon | null>(null)
   const remove = useMutation({
@@ -80,15 +71,13 @@ export default function PaymentCouponsPage() {
     },
   })
 
+  // The list handler resolves product/plan names onto each scope. No
+  // second round-trip for labels; a deployment that omits the names falls
+  // back to the target count, which is still truthful.
   const scopeLabel = (coupon: Coupon): string => {
     if (!coupon.scopes) return t("common.na")
     if (coupon.scopes.length === 0) return t("coupons.scope_all")
-    const productIDs = coupon.scopes.filter((s) => s.scope_type === "product").map((s) => s.scope_id)
-    const planIDs = coupon.scopes.filter((s) => s.scope_type === "plan").map((s) => s.scope_id)
-    const names = [
-      ...productIDs.map((id) => productNames.get(id)).filter(Boolean),
-      ...planIDs.map((id) => planNames.get(id)).filter(Boolean),
-    ]
+    const names = coupon.scopes.map((scope) => scope.name).filter((name): name is string => !!name)
     if (names.length > 0) return names.join(", ")
     return t("coupons.scope_count", { count: coupon.scopes.length })
   }
@@ -143,6 +132,19 @@ export default function PaymentCouponsPage() {
                 {STACK_GROUPS.map((value) => (
                   <SelectItem key={value} value={value}>
                     {t(`coupons.stack_group_${value}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={scopeType} onValueChange={setScopeType}>
+              <SelectTrigger className="w-36">
+                <SelectValue placeholder={t("coupons.scope")} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{t("coupons.scope")}</SelectItem>
+                {SCOPE_TYPES.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {value === "product" ? t("coupons.select_products") : t("coupons.select_plans")}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -202,8 +204,8 @@ export default function PaymentCouponsPage() {
                       <DataTableCell className="whitespace-nowrap text-xs text-muted-foreground">
                         {coupon.valid_from || coupon.valid_to
                           ? t("coupons.validity_window", {
-                              from: coupon.valid_from ? formatDate(coupon.valid_from) : "—",
-                              to: coupon.valid_to ? formatDate(coupon.valid_to) : "—",
+                              from: coupon.valid_from ? formatDateVN(coupon.valid_from) : "—",
+                              to: coupon.valid_to ? formatDateVN(coupon.valid_to) : "—",
                             })
                           : t("coupons.validity_always")}
                       </DataTableCell>

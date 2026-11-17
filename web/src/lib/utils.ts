@@ -30,6 +30,14 @@ export function formatDate(
   })
 }
 
+// Payment timestamps are UTC ISO strings and the merchant's business day
+// is Vietnam time (the reports API states the same zone). Rendering them
+// in the browser's zone would move a late-evening settlement to the next
+// day for an operator elsewhere, so payment screens pin the zone.
+export function formatDateVN(date: string | Date | null | undefined): string {
+  return formatDate(date, { timezone: "Asia/Ho_Chi_Minh" })
+}
+
 export function boolColor(active: boolean): string {
   return active ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-800"
 }
