@@ -186,8 +186,10 @@ export default function PaymentCouponEditorPage() {
   // for a saved coupon and never for the unsaved draft. The plan's own
   // price is the subtotal: the handler ignores a caller-supplied one, and
   // sending one would only pretend the input changed the quote.
-  const previewSignature = useDebounced(JSON.stringify({ code: draft.code, codes: extraCodes }), 500)
-  const previewEnabled = editing && !!id && !!previewPlan && draft.code.length > 0 && !validationError
+  // Price the stored code, not the code currently in the form: an
+  // unsaved rename must not turn into a not-found preview.
+  const previewSignature = useDebounced(JSON.stringify({ code: coupon?.code ?? "", codes: extraCodes }), 500)
+  const previewEnabled = editing && !!id && !!coupon?.code && !!previewPlan && !validationError
   const preview = useQuery({
     queryKey: ["admin", "coupons", "preview", id ?? "new", previewPlan, previewSignature, previewEmail],
     queryFn: () => {
@@ -195,7 +197,7 @@ export default function PaymentCouponEditorPage() {
       const input: CouponPreviewInput = {
         plan_id: previewPlan,
         quantity: 1,
-        codes: [parsed.code, ...parsed.codes].filter(Boolean),
+        codes: [...new Set([parsed.code, ...parsed.codes])].filter(Boolean),
         email: previewEmail || undefined,
       }
       return adminCoupons.preview(input)
