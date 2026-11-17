@@ -156,8 +156,10 @@ func BuyerOf(raw json.RawMessage) Buyer {
 // store.InvoiceFilter without leaking the store to the handlers.
 type ListFilter struct {
 	Status, LicenseID, OrderID, Number, ProductID string
-	From, To                                      *time.Time
-	Page                                          store.Page
+	// BuyerEmail scopes the list to one customer's invoices.
+	BuyerEmail string
+	From, To   *time.Time
+	Page       store.Page
 }
 
 // CreateForOrder writes the invoice for one paid order. It is
@@ -299,7 +301,7 @@ func (s *Service) Get(ctx context.Context, id string) (*model.Invoice, error) {
 func (s *Service) List(ctx context.Context, f ListFilter) ([]*model.Invoice, int, error) {
 	return s.Store.ListInvoices(ctx, store.InvoiceFilter{
 		Status: f.Status, LicenseID: f.LicenseID, OrderID: f.OrderID, Number: f.Number,
-		ProductID: f.ProductID, From: f.From, To: f.To, Page: f.Page,
+		ProductID: f.ProductID, BuyerEmail: f.BuyerEmail, From: f.From, To: f.To, Page: f.Page,
 	})
 }
 

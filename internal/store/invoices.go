@@ -51,8 +51,12 @@ type EInvoiceRef struct {
 // order, because an invoice stores no product of its own.
 type InvoiceFilter struct {
 	Status, LicenseID, OrderID, Number, ProductID string
-	From, To                                      *time.Time
-	Page                                          Page
+	// BuyerEmail scopes the ledger to one buyer; the customer portal
+	// lists its own invoices through it, and the check is server-side
+	// rather than a filter the handler could forget.
+	BuyerEmail string
+	From, To   *time.Time
+	Page       Page
 }
 
 // CreateInvoiceInput is the snapshot CreateInvoice writes. The caller
@@ -245,6 +249,9 @@ func (f InvoiceFilter) apply(q *bun.SelectQuery) *bun.SelectQuery {
 	}
 	if f.Number != "" {
 		q = q.Where("number = ?", f.Number)
+	}
+	if f.BuyerEmail != "" {
+		q = q.Where("lower(buyer->>'email') = lower(?)", f.BuyerEmail)
 	}
 	if f.ProductID != "" {
 		q = q.Where("order_id IN (SELECT id FROM payment_orders WHERE product_id = ?)", f.ProductID)

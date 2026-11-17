@@ -34,6 +34,7 @@ import (
 	"github.com/tabloy/keygate/internal/model"
 	"github.com/tabloy/keygate/internal/payment"
 	"github.com/tabloy/keygate/internal/payment/checkout"
+	"github.com/tabloy/keygate/internal/payment/coupons"
 	"github.com/tabloy/keygate/internal/payment/hooks"
 	"github.com/tabloy/keygate/internal/payment/invoice"
 	"github.com/tabloy/keygate/internal/payment/provider"
@@ -283,6 +284,9 @@ func main() {
 		5*time.Minute,
 	)
 	webhookSvc := service.NewWebhookService(db, logger, webhookHTTPTimeout, cfg.WebhookMaxAttempts, cfg.WebhookAllowPrivate)
+	// Phase 1b events: expiry, cancel and refund announce through the same
+	// dispatcher as the paid-order events.
+	orderEvents := service.NewOrderEventEmitter(webhookSvc, logger)
 	emailSvc := service.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername, cfg.SMTPPassword, cfg.SMTPFrom, logger, db)
 	emailSvc.SetBaseURL(cfg.BaseURL)
 	// LICENSE_SIGNING_KEY is a 32-byte ed25519 seed in hex. Parsed
@@ -466,7 +470,9 @@ func main() {
 	// settlement.PaidHook; coupon redemption is appended to the same chain
 	// (hooks.Chain) once Module B lands, because settlement has one field.
 	invoiceSvc := invoice.New(db, releaseStorage, logger)
-	settleSvc.PaidHook = hooks.Chain{invoiceSvc}
+	couponsSvc := coupons.New(db)
+	couponsSvc.Log = logger
+	settleSvc.PaidHook = hooks.Chain{invoiceSvc, couponsSvc}
 	paymentsWebhookH := &handler.PaymentsWebhookHandler{
 		Store: db, Config: providerSvc, Settlement: settleSvc, Log: logger,
 	}
@@ -507,11 +513,13 @@ func main() {
 	checkoutSvc := &checkout.Service{
 		Store: db, Config: providerSvc, Providers: providerFactory,
 		Webhooks: webhookSvc, Log: logger, BaseURL: cfg.BaseURL,
+		Coupons: couponsSvc, Settler: settleSvc,
 	}
-	paymentsAPIH := &handler.PaymentsAPIHandler{Checkout: checkoutSvc, Store: db}
+	paymentsAPIH := &handler.PaymentsAPIHandler{Checkout: checkoutSvc, Store: db, Events: orderEvents}
 	paymentsPublicH := &handler.PaymentsPublicHandler{Checkout: checkoutSvc, Store: db, Stripe: stripeH}
 	paymentsAdminH := &handler.PaymentsAdminHandler{
-		Store: db, Settlement: settleSvc, Config: providerSvc, Providers: providerFactory,
+		Events: orderEvents,
+		Store:  db, Settlement: settleSvc, Config: providerSvc, Providers: providerFactory,
 		// Registering the webhook is a PayOS client call, not an adapter
 		// method: ConfirmWebhook lives outside the Provider interface
 		// because no checkout path uses it. productID comes from the
@@ -533,6 +541,23 @@ func main() {
 	paymentsInvoicesH := &handler.InvoicesAdminHandler{Invoices: invoiceSvc}
 	paymentsReportsH := &handler.ReportsAdminHandler{Store: db}
 	consumerInvoiceH := &handler.ConsumerInvoiceHandler{Invoices: invoiceSvc, Store: db}
+	couponsAdminH := &handler.CouponsAdminHandler{Store: db, Checkout: checkoutSvc}
+	couponsPortalH := &handler.CouponsPortalHandler{Checkout: checkoutSvc}
+	// The portal's invoice surface reads module C through a thin adapter:
+	// its PDF returns the invoice too, which the portal does not need.
+	portalPayH := handler.NewPortalPaymentsHandler(db, checkoutSvc, handler.PortalInvoiceFuncs{
+		GetFn: invoiceSvc.Get,
+		PDFFn: func(ctx context.Context, id string) ([]byte, error) {
+			pdf, _, err := invoiceSvc.PDF(ctx, id)
+			return pdf, err
+		},
+		ListFn: func(ctx context.Context, f handler.PortalInvoiceFilter) ([]*model.Invoice, int, error) {
+			return invoiceSvc.List(ctx, invoice.ListFilter{
+				BuyerEmail: f.BuyerEmail,
+				Page:       store.Page{Limit: f.Limit, Offset: f.Offset},
+			})
+		},
+	})
 
 	expiryChecker := service.NewExpiryChecker(db, emailSvc, webhookSvc, logger)
 	if cfg.StripeSecretKey != "" {
@@ -628,7 +653,7 @@ func main() {
 	if providerSvc != nil {
 		rec := &reconcile.Worker{
 			Store: db, Config: providerSvc, Matcher: &reconcile.Matcher{Store: db},
-			Settlement: settleSvc, Log: logger,
+			Settlement: settleSvc, Log: logger, Events: orderEvents,
 		}
 		go rec.Run(ctx)
 	}
@@ -1088,6 +1113,8 @@ func main() {
 	portal := v1.Group("/portal", middleware.SessionAuth(cfg.JWTSecret, db.FindUserIsAdmin))
 	{
 		portal.GET("/me", authH.Me)
+		handler.RegisterPortalPaymentRoutes(portal, portalPayH)
+		handler.RegisterCouponsPortalRoutes(portal, couponsPortalH)
 		portal.GET("/licenses", func(c *gin.Context) {
 			emailVal, _ := c.Get("email")
 			emailStr, ok := emailVal.(string)
@@ -1351,6 +1378,7 @@ func main() {
 		admin.GET("/payments/orders", paymentsAdminH.ListOrders)
 		handler.RegisterInvoicesAdminRoutes(admin, paymentsInvoicesH)
 		handler.RegisterReportsAdminRoutes(admin, paymentsReportsH)
+		handler.RegisterCouponsAdminRoutes(admin, couponsAdminH)
 		admin.GET("/payments/orders/:code", paymentsAdminH.GetOrder)
 		admin.POST("/payments/orders/:code/mark-paid", paymentsAdminH.MarkPaid)
 		admin.POST("/payments/orders/:code/cancel", paymentsAdminH.CancelOrder)
