@@ -84,9 +84,12 @@ type CreateOrderInput struct {
 	// extends. payment_orders_renewal_once allows one pending renewal per
 	// (license_id, period_end), so a caller retrying a renewal must see
 	// that collision as its own answer, not as a code-allocation retry.
-	LicenseID string
-	PeriodEnd *time.Time
-	Discounts []OrderDiscount
+	// PeriodStart is the other end of that period: settlement extends the
+	// licence by exactly period_start..period_end.
+	LicenseID   string
+	PeriodStart *time.Time
+	PeriodEnd   *time.Time
+	Discounts   []OrderDiscount
 }
 
 // orderCode generates a code; a package var so a test can force a
@@ -168,7 +171,7 @@ func (s *Store) CreatePaymentOrder(ctx context.Context, in CreateOrderInput) (*m
 			Currency: in.Currency, CurrencyExp: in.CurrencyExponent, TaxRateBP: in.TaxRateBP,
 			Provider: in.Provider, Status: domain.OrderPending, ExpiresAt: in.ExpiresAt,
 			Buyer: buyer, Metadata: metadata, CreatedByKeyID: in.CreatedByKeyID,
-			LicenseID: in.LicenseID, PeriodEnd: in.PeriodEnd,
+			LicenseID: in.LicenseID, PeriodStart: in.PeriodStart, PeriodEnd: in.PeriodEnd,
 			CreatedAt: time.Now(), UpdatedAt: time.Now(),
 		}
 		err := RunInTx(ctx, s.DB, func(ctx context.Context, tx bun.Tx) error {
