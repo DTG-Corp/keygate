@@ -359,9 +359,10 @@ coupon redemption. It shares the `payments_public` bucket.
 `tax_minor`, `total_minor`, `currency`, `currency_exponent` and
 `discounts[]` (`code`, `type`, `amount_minor`). A rejected coupon is
 the matching `PAYMENT_COUPON_*` code; with `ignore_invalid_coupons`
-the code is dropped instead. `verify after merge`: module B owns this
-route and its rounding/trial fields; reconcile the exact key names
-against its handler before publishing.
+the code is dropped instead. The response also carries `currency`,
+`currency_exponent`, `billing_interval`, `trial_days` and `discounts[]`
+(`code`, `type`, `amount_minor`). It is mounted with the shared
+`payments_public` rate-limit bucket.
 
 #### Consumer invoices (phase 1b)
 
@@ -397,7 +398,7 @@ answered exactly like an unknown one (`404`), never `403`.
 | `GET` | `/api/v1/portal/invoices/:id` | invoice JSON, or `?format=pdf` |
 | `GET` | `/api/v1/portal/billing-profile` | saved buyer/tax block |
 | `PUT` | `/api/v1/portal/billing-profile` | validate and upsert it |
-| `POST` | `/api/v1/portal/coupons/validate` | phase 1b coupon preview (module B; **verify after merge**) |
+| `POST` | `/api/v1/portal/coupons/validate` | phase 1b coupon preview for the signed-in buyer |
 
 **Ownership.** An order belongs to the caller when the order email or
 the buyer snapshot's `email` equals the session email
@@ -758,9 +759,7 @@ or one that does not belong to the named plan is `404 PRICE_NOT_FOUND`.
 
 These routes sit on the same install-wide admin group as
 `/admin/payments` (`SessionOrAPIKey` + `RequireScope(admin)`); every
-write is audited. They are module B/C surfaces: shapes below follow the
-design spec and are marked **verify after merge** where the merged
-handler may differ.
+write is audited. The shapes below are the merged handlers' shapes.
 
 **Coupons and redemptions**
 
@@ -768,6 +767,7 @@ handler may differ.
 |---|---|---|
 | `GET` | `/api/v1/admin/coupons` | list; filters `q`, `active`, `stack_group`, `scope_type`; paginated |
 | `POST` | `/api/v1/admin/coupons` | create, with inline `scopes[]` |
+| `POST` | `/api/v1/admin/coupons/preview` | dry-run price for a plan + codes; creates nothing |
 | `GET` | `/api/v1/admin/coupons/:id` | detail |
 | `PUT` | `/api/v1/admin/coupons/:id` | update; scopes replaced atomically |
 | `DELETE` | `/api/v1/admin/coupons/:id` | delete only with no redemptions; otherwise archive (`active=false`) |
@@ -792,7 +792,7 @@ row and the filtered rows; the filename is `redemptions-<date>.csv`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/v1/admin/payments/invoices` | list; filters `status`, `number`, `order_code`, `email`, `from`, `to` |
+| `GET` | `/api/v1/admin/payments/invoices` | list; filters `status`, `number`, `license_id`, `order_id`, `product_id`, `from`, `to` |
 | `GET` | `/api/v1/admin/payments/invoices/:id` | one invoice with buyer/items |
 | `GET` | `/api/v1/admin/payments/invoices/:id/pdf` | stream the stored PDF |
 | `POST` | `/api/v1/admin/payments/invoices/:id/issue` | issue a draft / retry e-invoice |

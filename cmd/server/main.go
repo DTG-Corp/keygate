@@ -1099,6 +1099,7 @@ func main() {
 	// It is mounted at the spec root path and under /api/v1 (the SPA's
 	// api client prefixes it), sharing one rate-limit scope.
 	handler.RegisterPublicStatusRoutes(r, paymentsPublicH, cfg.RateLimitAPI)
+	handler.RegisterPublicQuoteRoutes(r, paymentsPublicH, cfg.RateLimitAPI)
 
 	// Consumer payments API. Every key is optionally bound to one product,
 	// and the handlers refuse anything outside it; create is the only
