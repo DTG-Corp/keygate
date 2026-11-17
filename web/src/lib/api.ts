@@ -274,10 +274,40 @@ export interface PayStatus {
   coupon_codes?: string[]
 }
 
+// The public quote is the one dry-run pricing route: it creates no
+// order and redeems no coupon. The SPA has no order-creation surface in
+// phase 1b, so nothing calls it yet; the typed client exists so a future
+// pricing widget does not have to guess the body. The pay page must
+// never call it — §3.13 says an existing order is never re-priced.
+export interface PaymentQuoteInput {
+  plan_id: string
+  quantity?: number
+  email?: string
+  coupon_codes?: string[]
+  ignore_invalid_coupons?: boolean
+}
+
+export interface PaymentQuote extends CouponQuote {
+  currency: string
+  currency_exponent: number
+  billing_interval: string
+}
+
 export const checkoutPay = {
   // Public: the order code is the capability, exactly like the Stripe
   // success page's session id. No cookie is sent.
   status: (code: string) => publicGet<PayStatus>(`/pay/${encodeURIComponent(code)}/status`),
+  quote: async (input: PaymentQuoteInput): Promise<PaymentQuote> => {
+    const raw = await post<unknown>("/payments/quote", { ...input, quantity: input.quantity ?? 1 })
+    const rec = rawRecord(raw)
+    const quote = normaliseCouponQuote(raw)
+    return {
+      ...quote,
+      currency: rawString(rec.currency) || quote.currency || "VND",
+      currency_exponent: rawNumber(rec.currency_exponent) ?? quote.currency_exponent ?? 0,
+      billing_interval: rawString(rec.billing_interval),
+    }
+  },
 }
 
 // ─── Invites (public, token-only) ───
@@ -1952,12 +1982,6 @@ export const portalBilling = {
 }
 
 // ─── File downloads (invoice PDF, report/redemption CSV) ───
-//
-// There is deliberately no client for the public `POST /payments/quote`
-// route: the shipped server does not register a handler for it. The pay
-// page only reads an existing order's status and never re-prices one, so
-// there is nothing here to call. If the route is mounted later, add the
-// client alongside its handler rather than guessing its shape.
 
 export interface DownloadedFile {
   blob: Blob
