@@ -9,7 +9,7 @@ Branch/worktree: `feat/sepay-payos-phase-1b` at `/tmp/kg-1b` (based on `chore/dt
 
 - Go + Bun. Tests first (TDD), `go build ./...`, `go vet ./...`, `go test ./...` green before any commit.
   Frontend: `cd web && bun run typecheck && bun run build` (or `bunx tsc -b --noEmit` + `bunx vite build`).
-- AGPL v3 §7(b): never remove/hide "Powered by Keygate" (`attribution_text`/`attribution_url`,
+- AGPL v3 §7(b): never remove/hide "Powered by DSoft" (`attribution_text`/`attribution_url`,
   `X-Powered-By`, footer sync). New pages keep the footer/attribution.
 - New payment paths never call Stripe. `plans.stripe_price_id` stays read-only legacy.
 - Money: integer minor units + `currency_exponent`; VND exponent 0. Never float.
@@ -279,8 +279,8 @@ Known limitations recorded at merge:
   auth (401 unauthenticated) and the SPA serves
   `/admin/payments/{coupons,invoices,reports}` and
   `/portal/{payments,invoices,billing-profile}`; `/api/v1/config` keeps
-  `attribution_text: "Powered by Keygate"` and every response carries
-  `X-Powered-By: Keygate`.
+  `attribution_text: "Powered by DSoft"` and every response carries
+  `X-Powered-By: DSoft`.
 - `mark-paid` requires a test provider resolution (fail-closed by
   design). Staging was switched to `PAYMENT_MODE=test` plus a test-mode
   `payos` row for the settlement step and restored to `live` immediately
@@ -306,7 +306,7 @@ Known limitations recorded at merge:
   `sepay-payos-1b+dtg-branding`, container healthy.
 - Production smoke (read-only, over `https://license.dtgsoft.vn`, using
   a temporary admin `api_keys` row that was deleted afterwards):
-  `attribution_text: "Powered by Keygate"`, `X-Powered-By: Keygate`,
+  `attribution_text: "Powered by DSoft"`, `X-Powered-By: DSoft`,
   SPA phase-1b pages return 200, admin/portal phase-1b APIs return 401
   unauthenticated, public quote for `starter-month` returns 99,000 VND
   with 9,000 VAT, admin invoices/coupons/orders lists empty, revenue CSV

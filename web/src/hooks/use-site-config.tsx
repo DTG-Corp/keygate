@@ -20,8 +20,8 @@ const defaults: SiteConfig = {
   logo_url: "",
   timezone: "UTC",
   language: "",
-  attribution_text: "Powered by Keygate",
-  attribution_url: "https://keygate.app",
+  attribution_text: "Powered by DSoft",
+  attribution_url: "https://github.com/dtg-corp/dsoft",
   loading: true,
 }
 
@@ -40,8 +40,8 @@ export function SiteConfigProvider({ children }: { children: ReactNode }) {
           logo_url: data.logo_url || "",
           timezone: data.timezone || "UTC",
           language: data.language || "",
-          attribution_text: data.attribution_text || "Powered by Keygate",
-          attribution_url: data.attribution_url || "https://keygate.app",
+          attribution_text: data.attribution_text || "Powered by DSoft",
+          attribution_url: data.attribution_url || "https://github.com/dtg-corp/dsoft",
           loading: false,
         })
         // Dynamic favicon from custom logo. index.html declares

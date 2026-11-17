@@ -1754,6 +1754,6 @@ func serveFrontend(r *gin.Engine) {
 // changePreviewKey is the key subscription change previews are signed
 // with, kept apart from the session tokens the same secret signs.
 func changePreviewKey(secret string) []byte {
-	sum := sha256.Sum256([]byte("keygate subscription change preview\x00" + secret))
+	sum := sha256.Sum256([]byte("dsoft subscription change preview\x00" + secret))
 	return sum[:]
 }

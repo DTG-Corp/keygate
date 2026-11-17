@@ -206,36 +206,49 @@ func planTypeRefused(c *gin.Context, err error) bool {
 // store.LockTrialFallbackIn), so an edit of that plan cannot slip in
 // between the check and the write.
 func (h *AdminHandler) createPlan(c *gin.Context, p *model.Plan, needsGatedFeed bool) error {
+	autoCheckoutID := p.CheckoutID == ""
 	h.Store.FillPlanIDs(p)
-	return h.Store.RunInTx(c, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := planFitsProductIn(ctx, tx, p); err != nil {
-			return err
-		}
-		// Plans first, then the product, as everywhere.
-		if p.TrialFallbackPlanID != "" {
-			if err := store.LockTrialFallbackIn(ctx, tx, p.TrialFallbackPlanID, p.ProductID); err != nil {
+	for attempts := 0; attempts < 5; attempts++ {
+		err := h.Store.RunInTx(c, func(ctx context.Context, tx bun.Tx) error {
+			if _, err := planFitsProductIn(ctx, tx, p); err != nil {
 				return err
 			}
-		}
-		if !needsGatedFeed {
+			// Plans first, then the product, as everywhere.
+			if p.TrialFallbackPlanID != "" {
+				if err := store.LockTrialFallbackIn(ctx, tx, p.TrialFallbackPlanID, p.ProductID); err != nil {
+					return err
+				}
+			}
+			if !needsGatedFeed {
+				return store.CreatePlanIn(ctx, tx, p)
+			}
+			if problem, err := h.maintenanceSwitchOff(ctx, tx); err != nil || problem != nil {
+				return firstNonNil(err, problem)
+			}
+			// The row this insert references first, the gate after.
+			if err := store.LockReferencedRowsIn(ctx, tx, "", p.ProductID); err != nil {
+				return err
+			}
+			problem, err := h.lockFeedGateIn(ctx, tx, p.ProductID)
+			if err != nil {
+				return err
+			}
+			if problem != nil {
+				return problem
+			}
 			return store.CreatePlanIn(ctx, tx, p)
+		})
+		if err == nil {
+			return nil
 		}
-		if problem, err := h.maintenanceSwitchOff(ctx, tx); err != nil || problem != nil {
-			return firstNonNil(err, problem)
+		if autoCheckoutID && store.IsUniqueViolationOn(err, "idx_plans_checkout_id") {
+			p.CheckoutID = ""
+			h.Store.FillPlanIDs(p)
+			continue
 		}
-		// The row this insert references first, the gate after.
-		if err := store.LockReferencedRowsIn(ctx, tx, "", p.ProductID); err != nil {
-			return err
-		}
-		problem, err := h.lockFeedGateIn(ctx, tx, p.ProductID)
-		if err != nil {
-			return err
-		}
-		if problem != nil {
-			return problem
-		}
-		return store.CreatePlanIn(ctx, tx, p)
-	})
+		return err
+	}
+	return errors.New("could not generate unique checkout_id for plan")
 }
 
 // invalidTermsError: the maintenance fields the request asks for do

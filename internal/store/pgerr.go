@@ -56,6 +56,9 @@ func isLockTimeout(err error) bool {
 // duplicate into a 409 instead of a 500.
 func IsUniqueViolation(err error) bool { return isUniqueViolation(err) }
 
+// IsUniqueViolationOn reports whether err is a unique violation on the named index.
+func IsUniqueViolationOn(err error, constraint string) bool { return isUniqueViolationOn(err, constraint) }
+
 // IsForeignKeyViolation reports whether err is a Postgres foreign-key
 // violation (SQLSTATE 23503): a row that names a parent which does not
 // exist, or a delete of a parent that still has children.

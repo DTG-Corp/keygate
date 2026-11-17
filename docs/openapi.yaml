@@ -127,7 +127,7 @@ info:
     `details` is present only for the codes that document it. `204 No
     Content` is the only success without a body.
 
-    Every response carries the header `X-Powered-By: Keygate`.
+    Every response carries the header `X-Powered-By: DSoft`.
 
     ## Rate limits and lockout
 
@@ -303,7 +303,7 @@ paths:
                         description: The server's BASE_URL, the address clients reach it at. The dashboard builds the feed URLs it shows from it.
                       attribution_text:
                         type: string
-                        description: Attribution notice, "Powered by Keygate".
+                        description: Attribution notice, "Powered by DSoft".
                       attribution_url:
                         type: string
                         description: Link for the attribution notice.
